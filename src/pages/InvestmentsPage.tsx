@@ -97,16 +97,55 @@ export function InvestmentsPage() {
       redeemedAt?: string;
     },
   ) {
-    if (selectedInvestment) {
-      await updateInvestment(selectedInvestment.id, payload);
-      toast.success('Investimento atualizado');
-    } else {
-      await createInvestment(payload);
-      toast.success('Investimento criado');
-    }
+    try {
+      if (selectedInvestment) {
+        await updateInvestment(selectedInvestment.id, {
+          name: payload.name,
+          type: payload.type,
+          institution: payload.institution,
+          investedAmount: Number(payload.investedAmount),
+          currentAmount:
+            payload.currentAmount !== undefined
+              ? Number(payload.currentAmount)
+              : undefined,
+          profitability:
+            payload.profitability !== undefined
+              ? Number(payload.profitability)
+              : undefined,
+          investedAt: payload.investedAt,
+          redeemedAt: payload.redeemedAt || undefined,
+          status: payload.status,
+          notes: payload.notes,
+        });
 
-    setShowModal(false);
-    await loadInvestments();
+        toast.success('Investimento atualizado');
+      } else {
+        await createInvestment({
+          name: payload.name,
+          type: payload.type,
+          institution: payload.institution,
+          investedAmount: Number(payload.investedAmount),
+          currentAmount:
+            payload.currentAmount !== undefined
+              ? Number(payload.currentAmount)
+              : undefined,
+          profitability:
+            payload.profitability !== undefined
+              ? Number(payload.profitability)
+              : undefined,
+          investedAt: payload.investedAt,
+          notes: payload.notes,
+        });
+
+        toast.success('Investimento criado');
+      }
+
+      setShowModal(false);
+      await loadInvestments();
+    } catch (error) {
+      console.error('Erro ao salvar investimento:', error);
+      toast.error('Não foi possível salvar o investimento.');
+    }
   }
 
   return (

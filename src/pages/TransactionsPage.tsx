@@ -1,12 +1,12 @@
-import type { ChangeEvent, FormEvent } from 'react';
+import type { FormEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownLeft,
   ArrowRightLeft,
   ArrowUpRight,
   CheckCircle2,
-  FileUp,
   Filter,
+  MoreVertical,
   Plus,
   RefreshCcw,
   Trash2,
@@ -25,7 +25,6 @@ import {
   deleteTransaction,
   listTransactions,
   payTransaction,
-  uploadTransactionAttachment,
   type CreateTransactionPayload,
   type TransactionFilters,
 } from '../services/transactions';
@@ -36,31 +35,6 @@ import type {
   TransactionStatus,
   TransactionType,
 } from '../types/finance';
-
-function money(value: number | string) {
-  return Number(value).toLocaleString('pt-BR', {
-    style: 'currency',
-    currency: 'BRL',
-  });
-}
-
-function formatDate(date: string) {
-  return new Date(date).toLocaleDateString('pt-BR');
-}
-
-const transactionTypeLabels: Record<TransactionType, string> = {
-  INCOME: 'Receita',
-  EXPENSE: 'Despesa',
-  TRANSFER: 'Transferência',
-};
-
-const statusLabels: Record<TransactionStatus, string> = {
-  PENDING: 'Pendente',
-  PAID: 'Pago',
-  CANCELED: 'Cancelado',
-};
-
-const today = new Date().toISOString().slice(0, 10);
 
 type ConfirmAction =
   | {
@@ -77,6 +51,46 @@ type ConfirmAction =
     }
   | null;
 
+function money(value: number | string) {
+  return Number(value).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  });
+}
+
+function toInputDate(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function formatDate(date: string) {
+  const [dateOnly] = date.split('T');
+  const [year, month, day] = dateOnly.split('-');
+
+  if (year && month && day) {
+    return `${day}/${month}/${year}`;
+  }
+
+  return new Date(date).toLocaleDateString('pt-BR');
+}
+
+const transactionTypeLabels: Record<TransactionType, string> = {
+  INCOME: 'Receita',
+  EXPENSE: 'Despesa',
+  TRANSFER: 'Transferência',
+};
+
+const statusLabels: Record<TransactionStatus, string> = {
+  PENDING: 'Pendente',
+  PAID: 'Pago',
+  CANCELED: 'Cancelado',
+};
+
+const today = toInputDate();
+
 export function TransactionsPage() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -91,6 +105,7 @@ export function TransactionsPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [openedMenuId, setOpenedMenuId] = useState<string | null>(null);
 
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
 
@@ -218,7 +233,7 @@ export function TransactionsPage() {
       setSaving(true);
 
       const payload: CreateTransactionPayload = {
-        description: form.description,
+        description: form.description.trim(),
         type: form.type,
         amount: Number(form.amount),
         transactionDate: form.transactionDate,
@@ -231,7 +246,7 @@ export function TransactionsPage() {
             ? form.transferAccountId || undefined
             : undefined,
         dueDate: form.dueDate || undefined,
-        notes: form.notes || undefined,
+        notes: form.notes?.trim() || undefined,
       };
 
       await createTransaction(payload);
@@ -274,6 +289,7 @@ export function TransactionsPage() {
       }
 
       setConfirmAction(null);
+      setOpenedMenuId(null);
 
       await loadData();
     } catch (error) {
@@ -284,60 +300,44 @@ export function TransactionsPage() {
     }
   }
 
-  async function handleUpload(
-    transactionId: string,
-    event: ChangeEvent<HTMLInputElement>,
-  ) {
-    const file = event.target.files?.[0];
-
-    if (!file) {
-      return;
-    }
-
-    try {
-      await uploadTransactionAttachment(transactionId, file);
-      toast.success('Comprovante enviado com sucesso.');
-      event.target.value = '';
-    } catch (error) {
-      console.error('Erro ao enviar comprovante:', error);
-      toast.error('Não foi possível enviar o comprovante.');
-    }
-  }
-
   function getTransactionIcon(type: TransactionType) {
     if (type === 'INCOME') return ArrowDownLeft;
     if (type === 'EXPENSE') return ArrowUpRight;
     return ArrowRightLeft;
   }
 
-  function getAmountClass(type: TransactionType) {
-    if (type === 'INCOME') return 'text-emerald-600';
-    if (type === 'EXPENSE') return 'text-red-600';
-    return 'text-violet-600';
-  }
+  function getTransactionClasses(type: TransactionType) {
+    if (type === 'INCOME') {
+      return {
+        icon: 'bg-emerald-50 text-emerald-600',
+        amount: 'text-emerald-600',
+        prefix: '+',
+      };
+    }
 
-  function getAmountPrefix(type: TransactionType) {
-    if (type === 'INCOME') return '+';
-    if (type === 'EXPENSE') return '-';
-    return '';
+    if (type === 'EXPENSE') {
+      return {
+        icon: 'bg-red-50 text-red-600',
+        amount: 'text-red-600',
+        prefix: '-',
+      };
+    }
+
+    return {
+      icon: 'bg-violet-50 text-violet-600',
+      amount: 'text-violet-600',
+      prefix: '',
+    };
   }
 
   function getConfirmTitle() {
-    if (confirmAction?.type === 'pay') {
-      return 'Marcar como paga?';
-    }
-
-    if (confirmAction?.type === 'cancel') {
-      return 'Cancelar movimentação?';
-    }
-
+    if (confirmAction?.type === 'pay') return 'Marcar como paga?';
+    if (confirmAction?.type === 'cancel') return 'Cancelar movimentação?';
     return 'Excluir movimentação?';
   }
 
   function getConfirmDescription() {
-    if (!confirmAction) {
-      return undefined;
-    }
+    if (!confirmAction) return undefined;
 
     if (confirmAction.type === 'pay') {
       return `A movimentação "${confirmAction.transaction.description}" será marcada como paga.`;
@@ -351,15 +351,30 @@ export function TransactionsPage() {
   }
 
   function getConfirmLabel() {
-    if (confirmAction?.type === 'pay') {
-      return 'Marcar paga';
-    }
-
-    if (confirmAction?.type === 'cancel') {
-      return 'Cancelar';
-    }
-
+    if (confirmAction?.type === 'pay') return 'Marcar paga';
+    if (confirmAction?.type === 'cancel') return 'Cancelar';
     return 'Excluir';
+  }
+
+  function openCreate(type: TransactionType) {
+    resetForm(type);
+    setShowForm(true);
+  }
+
+  function renderStatus(status: TransactionStatus) {
+    return (
+      <span
+        className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+          status === 'PAID'
+            ? 'bg-emerald-50 text-emerald-700'
+            : status === 'CANCELED'
+              ? 'bg-slate-100 text-slate-500'
+              : 'bg-amber-50 text-amber-700'
+        }`}
+      >
+        {statusLabels[status]}
+      </span>
+    );
   }
 
   return (
@@ -375,7 +390,7 @@ export function TransactionsPage() {
               </h1>
 
               <p className="mt-2 text-sm text-violet-100">
-                Receitas, despesas, transferências e comprovantes.
+                Receitas, despesas e transferências.
               </p>
             </div>
 
@@ -394,10 +409,7 @@ export function TransactionsPage() {
                 <button
                   key={type}
                   type="button"
-                  onClick={() => {
-                    resetForm(type);
-                    setShowForm(true);
-                  }}
+                  onClick={() => openCreate(type)}
                   className="flex min-w-max items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-violet-800 shadow-lg shadow-violet-950/20"
                 >
                   <Plus size={17} />
@@ -497,6 +509,8 @@ export function TransactionsPage() {
             {transactions.length ? (
               transactions.map((transaction) => {
                 const Icon = getTransactionIcon(transaction.type);
+                const classes = getTransactionClasses(transaction.type);
+                const menuOpen = openedMenuId === transaction.id;
 
                 return (
                   <article
@@ -505,23 +519,20 @@ export function TransactionsPage() {
                   >
                     <div className="flex items-start gap-3">
                       <div
-                        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${
-                          transaction.type === 'INCOME'
-                            ? 'bg-emerald-50 text-emerald-600'
-                            : transaction.type === 'EXPENSE'
-                              ? 'bg-red-50 text-red-600'
-                              : 'bg-violet-50 text-violet-600'
-                        }`}
+                        className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${classes.icon}`}
                       >
                         <Icon size={22} />
                       </div>
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <h2 className="font-bold text-slate-950">
-                              {transaction.description}
-                            </h2>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h2 className="truncate font-bold text-slate-950">
+                                {transaction.description}
+                              </h2>
+                              {renderStatus(transaction.status)}
+                            </div>
 
                             <p className="mt-1 text-xs text-slate-500">
                               {formatDate(transaction.transactionDate)}
@@ -534,85 +545,76 @@ export function TransactionsPage() {
                             </p>
                           </div>
 
-                          <strong
-                            className={`text-sm font-black ${getAmountClass(
-                              transaction.type,
-                            )}`}
-                          >
-                            {getAmountPrefix(transaction.type)}
-                            {money(transaction.amount)}
-                          </strong>
-                        </div>
-
-                        <div className="mt-4 flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded-full px-3 py-1 text-xs font-bold ${
-                              transaction.status === 'PAID'
-                                ? 'bg-emerald-50 text-emerald-700'
-                                : transaction.status === 'CANCELED'
-                                  ? 'bg-red-50 text-red-700'
-                                  : 'bg-amber-50 text-amber-700'
-                            }`}
-                          >
-                            {statusLabels[transaction.status]}
-                          </span>
-
-                          {transaction.status !== 'PAID' && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setConfirmAction({
-                                  type: 'pay',
-                                  transaction,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700"
+                          <div className="flex shrink-0 items-start gap-2">
+                            <strong
+                              className={`pt-1 text-sm font-black ${classes.amount}`}
                             >
-                              <CheckCircle2 size={14} />
-                              Pagar
-                            </button>
-                          )}
+                              {classes.prefix}
+                              {money(transaction.amount)}
+                            </strong>
 
-                          {transaction.status !== 'CANCELED' && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setConfirmAction({
-                                  type: 'cancel',
-                                  transaction,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-red-700"
-                            >
-                              <XCircle size={14} />
-                              Cancelar
-                            </button>
-                          )}
+                            <div className="relative">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setOpenedMenuId(menuOpen ? null : transaction.id)
+                                }
+                                className="flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-50 text-slate-500"
+                              >
+                                <MoreVertical size={18} />
+                              </button>
 
-                          <label className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-violet-50 px-3 py-1 text-xs font-bold text-violet-700">
-                            <FileUp size={14} />
-                            Comprovante
-                            <input
-                              type="file"
-                              className="hidden"
-                              accept="image/*,.pdf"
-                              onChange={(event) => handleUpload(transaction.id, event)}
-                            />
-                          </label>
+                              {menuOpen && (
+                                <div className="absolute right-0 top-11 z-20 w-44 rounded-2xl border border-slate-100 bg-white p-2 shadow-xl">
+                                  {transaction.status !== 'PAID' && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setConfirmAction({
+                                          type: 'pay',
+                                          transaction,
+                                        })
+                                      }
+                                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-slate-50"
+                                    >
+                                      <CheckCircle2 size={15} />
+                                      Marcar como paga
+                                    </button>
+                                  )}
 
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setConfirmAction({
-                                type: 'delete',
-                                transaction,
-                              })
-                            }
-                            className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600"
-                          >
-                            <Trash2 size={14} />
-                            Excluir
-                          </button>
+                                  {transaction.status !== 'CANCELED' && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setConfirmAction({
+                                          type: 'cancel',
+                                          transaction,
+                                        })
+                                      }
+                                      className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold text-slate-700 hover:bg-slate-50"
+                                    >
+                                      <XCircle size={15} />
+                                      Cancelar
+                                    </button>
+                                  )}
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setConfirmAction({
+                                        type: 'delete',
+                                        transaction,
+                                      })
+                                    }
+                                    className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold text-red-600 hover:bg-red-50"
+                                  >
+                                    <Trash2 size={15} />
+                                    Excluir
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>

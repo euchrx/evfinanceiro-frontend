@@ -46,7 +46,11 @@ export function MorePage() {
 
   function handleLogout() {
     localStorage.removeItem('@EvFinanceiro:token');
-    navigate('/login');
+    localStorage.removeItem('@EvFinanceiro:user');
+
+    navigate('/login', {
+      replace: true,
+    });
   }
 
   return (

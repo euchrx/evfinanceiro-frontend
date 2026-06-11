@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Plus, WalletCards } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { AccountCard } from '../components/AccountCard';
 import { AccountFormModal } from '../components/AccountFormModal';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
 import {
   createAccount,
   deleteAccount,
@@ -13,11 +16,18 @@ import {
 import type { FinancialAccount } from '../types/finance';
 
 export function AccountsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+
   const [accounts, setAccounts] = useState<FinancialAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const [selectedAccount, setSelectedAccount] =
+    useState<FinancialAccount | null>(null);
+
+  const [accountToDelete, setAccountToDelete] =
     useState<FinancialAccount | null>(null);
 
   const [showModal, setShowModal] = useState(false);
@@ -30,7 +40,7 @@ export function AccountsPage() {
       setAccounts(response);
     } catch (error) {
       console.error('Erro ao carregar contas:', error);
-      alert('Não foi possível carregar as contas.');
+      toast.error('Não foi possível carregar as contas.');
     } finally {
       setLoading(false);
     }
@@ -38,7 +48,22 @@ export function AccountsPage() {
 
   useEffect(() => {
     loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const state = location.state as { openCreateModal?: boolean } | null;
+
+    if (state?.openCreateModal) {
+      setSelectedAccount(null);
+      setShowModal(true);
+
+      navigate(location.pathname, {
+        replace: true,
+        state: null,
+      });
+    }
+  }, [location.pathname, location.state, navigate]);
 
   function handleNew() {
     setSelectedAccount(null);
@@ -50,19 +75,28 @@ export function AccountsPage() {
     setShowModal(true);
   }
 
-  async function handleDelete(account: FinancialAccount) {
-    if (!confirm(`Deseja excluir a conta ${account.name}?`)) {
+  function handleDelete(account: FinancialAccount) {
+    setAccountToDelete(account);
+  }
+
+  async function confirmDelete() {
+    if (!accountToDelete) {
       return;
     }
 
     try {
       setSaving(true);
 
-      await deleteAccount(account.id);
+      await deleteAccount(accountToDelete.id);
+
+      toast.success('Conta excluída com sucesso.');
+
+      setAccountToDelete(null);
+
       await loadAccounts();
     } catch (error) {
       console.error('Erro ao excluir conta:', error);
-      alert('Não foi possível excluir a conta.');
+      toast.error('Não foi possível excluir a conta.');
     } finally {
       setSaving(false);
     }
@@ -79,14 +113,15 @@ export function AccountsPage() {
 
       if (selectedAccount) {
         await updateAccount(selectedAccount.id, normalizedPayload);
+        toast.success('Conta atualizada com sucesso.');
       } else {
-        const { active: _active, ...createPayload } = normalizedPayload;
-
         await createAccount({
-          name: createPayload.name,
-          type: createPayload.type,
-          initialBalance: Number(createPayload.initialBalance),
+          name: normalizedPayload.name,
+          type: normalizedPayload.type,
+          initialBalance: Number(normalizedPayload.initialBalance),
         });
+
+        toast.success('Conta criada com sucesso.');
       }
 
       setShowModal(false);
@@ -95,7 +130,7 @@ export function AccountsPage() {
       await loadAccounts();
     } catch (error) {
       console.error('Erro ao salvar conta:', error);
-      alert('Não foi possível salvar a conta. Verifique os dados e tente novamente.');
+      toast.error('Não foi possível salvar a conta.');
     } finally {
       setSaving(false);
     }
@@ -181,6 +216,22 @@ export function AccountsPage() {
           onSubmit={handleSubmit}
         />
       )}
+
+      <ConfirmDialog
+        open={!!accountToDelete}
+        title="Excluir conta?"
+        description={
+          accountToDelete
+            ? `A conta "${accountToDelete.name}" será removida. Essa ação não poderá ser desfeita.`
+            : undefined
+        }
+        confirmLabel="Excluir"
+        cancelLabel="Cancelar"
+        loading={saving}
+        tone="danger"
+        onCancel={() => setAccountToDelete(null)}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LineChart, Plus, TrendingUp, WalletCards } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EmptyState } from '../components/EmptyState';
 import { InvestmentCard } from '../components/InvestmentCard';
 import { InvestmentFormModal } from '../components/InvestmentFormModal';
@@ -25,10 +27,19 @@ function money(value: number) {
 
 export function InvestmentsPage() {
   const toast = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const [investments, setInvestments] = useState<Investment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedInvestment, setSelectedInvestment] = useState<Investment | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const [selectedInvestment, setSelectedInvestment] =
+    useState<Investment | null>(null);
+
+  const [investmentToDelete, setInvestmentToDelete] =
+    useState<Investment | null>(null);
+
   const [showModal, setShowModal] = useState(false);
 
   const summary = useMemo(() => {
@@ -62,6 +73,9 @@ export function InvestmentsPage() {
     try {
       const response = await listInvestments();
       setInvestments(response);
+    } catch (error) {
+      console.error('Erro ao carregar investimentos:', error);
+      toast.error('Não foi possível carregar os investimentos.');
     } finally {
       setLoading(false);
     }
@@ -69,7 +83,22 @@ export function InvestmentsPage() {
 
   useEffect(() => {
     loadInvestments();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const state = location.state as { openCreateModal?: boolean } | null;
+
+    if (state?.openCreateModal) {
+      setSelectedInvestment(null);
+      setShowModal(true);
+
+      navigate(location.pathname, {
+        replace: true,
+        state: null,
+      });
+    }
+  }, [location.pathname, location.state, navigate]);
 
   function handleNew() {
     setSelectedInvestment(null);
@@ -81,14 +110,31 @@ export function InvestmentsPage() {
     setShowModal(true);
   }
 
-  async function handleDelete(investment: Investment) {
-    if (!confirm(`Deseja excluir o investimento ${investment.name}?`)) {
+  function handleDelete(investment: Investment) {
+    setInvestmentToDelete(investment);
+  }
+
+  async function confirmDelete() {
+    if (!investmentToDelete) {
       return;
     }
 
-    await deleteInvestment(investment.id);
-    toast.success('Investimento excluído');
-    await loadInvestments();
+    try {
+      setSaving(true);
+
+      await deleteInvestment(investmentToDelete.id);
+
+      toast.success('Investimento excluído com sucesso.');
+
+      setInvestmentToDelete(null);
+
+      await loadInvestments();
+    } catch (error) {
+      console.error('Erro ao excluir investimento:', error);
+      toast.error('Não foi possível excluir o investimento.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleSubmit(
@@ -98,6 +144,8 @@ export function InvestmentsPage() {
     },
   ) {
     try {
+      setSaving(true);
+
       if (selectedInvestment) {
         await updateInvestment(selectedInvestment.id, {
           name: payload.name,
@@ -118,7 +166,7 @@ export function InvestmentsPage() {
           notes: payload.notes,
         });
 
-        toast.success('Investimento atualizado');
+        toast.success('Investimento atualizado com sucesso.');
       } else {
         await createInvestment({
           name: payload.name,
@@ -137,14 +185,18 @@ export function InvestmentsPage() {
           notes: payload.notes,
         });
 
-        toast.success('Investimento criado');
+        toast.success('Investimento criado com sucesso.');
       }
 
       setShowModal(false);
+      setSelectedInvestment(null);
+
       await loadInvestments();
     } catch (error) {
       console.error('Erro ao salvar investimento:', error);
       toast.error('Não foi possível salvar o investimento.');
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -156,7 +208,10 @@ export function InvestmentsPage() {
 
           <div className="mt-1 flex items-center justify-between gap-3">
             <div>
-              <h1 className="text-3xl font-black tracking-tight">Investimentos</h1>
+              <h1 className="text-3xl font-black tracking-tight">
+                Investimentos
+              </h1>
+
               <p className="mt-2 text-sm text-violet-100">
                 Acompanhe patrimônio, rentabilidade e evolução.
               </p>
@@ -165,7 +220,8 @@ export function InvestmentsPage() {
             <button
               type="button"
               onClick={handleNew}
-              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-violet-800 shadow-lg shadow-violet-950/20"
+              disabled={saving}
+              className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-violet-800 shadow-lg shadow-violet-950/20 disabled:opacity-60"
             >
               <Plus size={22} />
             </button>
@@ -173,6 +229,7 @@ export function InvestmentsPage() {
 
           <div className="mt-7">
             <p className="text-sm text-violet-100">Patrimônio investido</p>
+
             <strong className="mt-1 block text-4xl font-black tracking-tight">
               {money(summary.currentTotal)}
             </strong>
@@ -232,7 +289,8 @@ export function InvestmentsPage() {
               <button
                 type="button"
                 onClick={handleNew}
-                className="rounded-2xl bg-violet-700 px-5 py-3 text-sm font-black text-white"
+                disabled={saving}
+                className="rounded-2xl bg-violet-700 px-5 py-3 text-sm font-black text-white disabled:opacity-60"
               >
                 Novo investimento
               </button>
@@ -244,10 +302,29 @@ export function InvestmentsPage() {
       {showModal && (
         <InvestmentFormModal
           investment={selectedInvestment}
-          onClose={() => setShowModal(false)}
+          onClose={() => {
+            setShowModal(false);
+            setSelectedInvestment(null);
+          }}
           onSubmit={handleSubmit}
         />
       )}
+
+      <ConfirmDialog
+        open={!!investmentToDelete}
+        title="Excluir investimento?"
+        description={
+          investmentToDelete
+            ? `O investimento "${investmentToDelete.name}" será removido. Essa ação não poderá ser desfeita.`
+            : undefined
+        }
+        confirmLabel="Excluir"
+        cancelLabel="Cancelar"
+        loading={saving}
+        tone="danger"
+        onCancel={() => setInvestmentToDelete(null)}
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

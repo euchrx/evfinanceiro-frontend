@@ -13,7 +13,10 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { useToast } from '../components/ToastProvider';
 import { listAccounts } from '../services/accounts';
 import { listCategories } from '../services/categories';
 import {
@@ -59,7 +62,26 @@ const statusLabels: Record<TransactionStatus, string> = {
 
 const today = new Date().toISOString().slice(0, 10);
 
+type ConfirmAction =
+  | {
+      type: 'delete';
+      transaction: FinancialTransaction;
+    }
+  | {
+      type: 'pay';
+      transaction: FinancialTransaction;
+    }
+  | {
+      type: 'cancel';
+      transaction: FinancialTransaction;
+    }
+  | null;
+
 export function TransactionsPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const toast = useToast();
+
   const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
   const [accounts, setAccounts] = useState<FinancialAccount[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -69,6 +91,8 @@ export function TransactionsPage() {
 
   const [showForm, setShowForm] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
 
   const [filters, setFilters] = useState<TransactionFilters>({
     type: '',
@@ -115,6 +139,9 @@ export function TransactionsPage() {
       setTransactions(transactionsResponse.items);
       setAccounts(accountsResponse);
       setCategories(categoriesResponse);
+    } catch (error) {
+      console.error('Erro ao carregar movimentações:', error);
+      toast.error('Não foi possível carregar as movimentações.');
     } finally {
       setLoading(false);
     }
@@ -124,6 +151,26 @@ export function TransactionsPage() {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const state = location.state as
+      | {
+          openCreateModal?: boolean;
+          transactionType?: TransactionType;
+        }
+      | null;
+
+    if (state?.openCreateModal) {
+      resetForm(state.transactionType ?? 'EXPENSE');
+      setShowForm(true);
+
+      navigate(location.pathname, {
+        replace: true,
+        state: null,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname, location.state, navigate, accounts]);
 
   function updateForm<K extends keyof CreateTransactionPayload>(
     key: K,
@@ -153,17 +200,17 @@ export function TransactionsPage() {
     event.preventDefault();
 
     if (!form.accountId) {
-      alert('Selecione uma conta.');
+      toast.error('Selecione uma conta.');
       return;
     }
 
     if (form.type === 'TRANSFER' && !form.transferAccountId) {
-      alert('Selecione a conta destino.');
+      toast.error('Selecione a conta destino.');
       return;
     }
 
     if (form.type === 'TRANSFER' && form.accountId === form.transferAccountId) {
-      alert('A conta origem e destino não podem ser iguais.');
+      toast.error('A conta origem e destino não podem ser iguais.');
       return;
     }
 
@@ -171,54 +218,90 @@ export function TransactionsPage() {
       setSaving(true);
 
       const payload: CreateTransactionPayload = {
-        ...form,
+        description: form.description,
+        type: form.type,
         amount: Number(form.amount),
-        categoryId: form.type === 'TRANSFER' ? undefined : form.categoryId || undefined,
+        transactionDate: form.transactionDate,
+        status: form.status,
+        accountId: form.accountId,
+        categoryId:
+          form.type === 'TRANSFER' ? undefined : form.categoryId || undefined,
         transferAccountId:
-          form.type === 'TRANSFER' ? form.transferAccountId || undefined : undefined,
+          form.type === 'TRANSFER'
+            ? form.transferAccountId || undefined
+            : undefined,
         dueDate: form.dueDate || undefined,
         notes: form.notes || undefined,
       };
 
       await createTransaction(payload);
 
+      toast.success('Movimentação criada com sucesso.');
+
       setShowForm(false);
       resetForm();
+
       await loadData();
+    } catch (error) {
+      console.error('Erro ao criar movimentação:', error);
+      toast.error('Não foi possível criar a movimentação.');
     } finally {
       setSaving(false);
     }
   }
 
-  async function handlePay(id: string) {
-    await payTransaction(id);
-    await loadData();
-  }
-
-  async function handleCancel(id: string) {
-    await cancelTransaction(id);
-    await loadData();
-  }
-
-  async function handleDelete(id: string) {
-    if (!confirm('Deseja excluir esta movimentação?')) {
+  async function confirmSelectedAction() {
+    if (!confirmAction) {
       return;
     }
 
-    await deleteTransaction(id);
-    await loadData();
+    try {
+      setSaving(true);
+
+      if (confirmAction.type === 'pay') {
+        await payTransaction(confirmAction.transaction.id);
+        toast.success('Movimentação marcada como paga.');
+      }
+
+      if (confirmAction.type === 'cancel') {
+        await cancelTransaction(confirmAction.transaction.id);
+        toast.success('Movimentação cancelada.');
+      }
+
+      if (confirmAction.type === 'delete') {
+        await deleteTransaction(confirmAction.transaction.id);
+        toast.success('Movimentação excluída.');
+      }
+
+      setConfirmAction(null);
+
+      await loadData();
+    } catch (error) {
+      console.error('Erro ao executar ação:', error);
+      toast.error('Não foi possível concluir a ação.');
+    } finally {
+      setSaving(false);
+    }
   }
 
-  async function handleUpload(transactionId: string, event: ChangeEvent<HTMLInputElement>) {
+  async function handleUpload(
+    transactionId: string,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
     const file = event.target.files?.[0];
 
     if (!file) {
       return;
     }
 
-    await uploadTransactionAttachment(transactionId, file);
-    alert('Comprovante enviado com sucesso.');
-    event.target.value = '';
+    try {
+      await uploadTransactionAttachment(transactionId, file);
+      toast.success('Comprovante enviado com sucesso.');
+      event.target.value = '';
+    } catch (error) {
+      console.error('Erro ao enviar comprovante:', error);
+      toast.error('Não foi possível enviar o comprovante.');
+    }
   }
 
   function getTransactionIcon(type: TransactionType) {
@@ -239,14 +322,58 @@ export function TransactionsPage() {
     return '';
   }
 
+  function getConfirmTitle() {
+    if (confirmAction?.type === 'pay') {
+      return 'Marcar como paga?';
+    }
+
+    if (confirmAction?.type === 'cancel') {
+      return 'Cancelar movimentação?';
+    }
+
+    return 'Excluir movimentação?';
+  }
+
+  function getConfirmDescription() {
+    if (!confirmAction) {
+      return undefined;
+    }
+
+    if (confirmAction.type === 'pay') {
+      return `A movimentação "${confirmAction.transaction.description}" será marcada como paga.`;
+    }
+
+    if (confirmAction.type === 'cancel') {
+      return `A movimentação "${confirmAction.transaction.description}" será cancelada.`;
+    }
+
+    return `A movimentação "${confirmAction.transaction.description}" será removida. Essa ação não poderá ser desfeita.`;
+  }
+
+  function getConfirmLabel() {
+    if (confirmAction?.type === 'pay') {
+      return 'Marcar paga';
+    }
+
+    if (confirmAction?.type === 'cancel') {
+      return 'Cancelar';
+    }
+
+    return 'Excluir';
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 pb-24 md:pb-8">
       <section className="rounded-b-[2.5rem] bg-gradient-to-br from-violet-950 via-violet-800 to-fuchsia-700 px-5 pb-8 pt-7 text-white md:rounded-none md:px-8">
         <div className="mx-auto max-w-6xl">
           <p className="text-sm text-violet-100">EvFinanceiro</p>
+
           <div className="mt-1 flex items-center justify-between gap-3">
             <div>
-              <h1 className="text-3xl font-black tracking-tight">Movimentações</h1>
+              <h1 className="text-3xl font-black tracking-tight">
+                Movimentações
+              </h1>
+
               <p className="mt-2 text-sm text-violet-100">
                 Receitas, despesas, transferências e comprovantes.
               </p>
@@ -262,20 +389,22 @@ export function TransactionsPage() {
           </div>
 
           <div className="mt-6 flex gap-3 overflow-x-auto pb-1">
-            {(['INCOME', 'EXPENSE', 'TRANSFER'] as TransactionType[]).map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => {
-                  resetForm(type);
-                  setShowForm(true);
-                }}
-                className="flex min-w-max items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-violet-800 shadow-lg shadow-violet-950/20"
-              >
-                <Plus size={17} />
-                Nova {transactionTypeLabels[type]}
-              </button>
-            ))}
+            {(['INCOME', 'EXPENSE', 'TRANSFER'] as TransactionType[]).map(
+              (type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => {
+                    resetForm(type);
+                    setShowForm(true);
+                  }}
+                  className="flex min-w-max items-center gap-2 rounded-2xl bg-white px-4 py-3 text-sm font-bold text-violet-800 shadow-lg shadow-violet-950/20"
+                >
+                  <Plus size={17} />
+                  Nova {transactionTypeLabels[type]}
+                </button>
+              ),
+            )}
           </div>
         </div>
       </section>
@@ -393,6 +522,7 @@ export function TransactionsPage() {
                             <h2 className="font-bold text-slate-950">
                               {transaction.description}
                             </h2>
+
                             <p className="mt-1 text-xs text-slate-500">
                               {formatDate(transaction.transactionDate)}
                               {transaction.account?.name
@@ -430,7 +560,12 @@ export function TransactionsPage() {
                           {transaction.status !== 'PAID' && (
                             <button
                               type="button"
-                              onClick={() => handlePay(transaction.id)}
+                              onClick={() =>
+                                setConfirmAction({
+                                  type: 'pay',
+                                  transaction,
+                                })
+                              }
                               className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700"
                             >
                               <CheckCircle2 size={14} />
@@ -441,7 +576,12 @@ export function TransactionsPage() {
                           {transaction.status !== 'CANCELED' && (
                             <button
                               type="button"
-                              onClick={() => handleCancel(transaction.id)}
+                              onClick={() =>
+                                setConfirmAction({
+                                  type: 'cancel',
+                                  transaction,
+                                })
+                              }
                               className="inline-flex items-center gap-1 rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-red-700"
                             >
                               <XCircle size={14} />
@@ -462,7 +602,12 @@ export function TransactionsPage() {
 
                           <button
                             type="button"
-                            onClick={() => handleDelete(transaction.id)}
+                            onClick={() =>
+                              setConfirmAction({
+                                type: 'delete',
+                                transaction,
+                              })
+                            }
                             className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600"
                           >
                             <Trash2 size={14} />
@@ -494,6 +639,7 @@ export function TransactionsPage() {
                 <p className="text-sm font-medium text-violet-600">
                   Nova movimentação
                 </p>
+
                 <h2 className="text-2xl font-black text-slate-950">
                   {transactionTypeLabels[form.type]}
                 </h2>
@@ -510,30 +656,33 @@ export function TransactionsPage() {
 
             <div className="grid gap-4">
               <div className="grid grid-cols-3 gap-2">
-                {(['INCOME', 'EXPENSE', 'TRANSFER'] as TransactionType[]).map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => {
-                      updateForm('type', type);
-                      updateForm('categoryId', '');
-                      updateForm('transferAccountId', '');
-                    }}
-                    className={`rounded-2xl px-3 py-3 text-xs font-bold ${
-                      form.type === type
-                        ? 'bg-violet-700 text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {transactionTypeLabels[type]}
-                  </button>
-                ))}
+                {(['INCOME', 'EXPENSE', 'TRANSFER'] as TransactionType[]).map(
+                  (type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => {
+                        updateForm('type', type);
+                        updateForm('categoryId', '');
+                        updateForm('transferAccountId', '');
+                      }}
+                      className={`rounded-2xl px-3 py-3 text-xs font-bold ${
+                        form.type === type
+                          ? 'bg-violet-700 text-white'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {transactionTypeLabels[type]}
+                    </button>
+                  ),
+                )}
               </div>
 
               <label>
                 <span className="mb-2 block text-sm font-bold text-slate-700">
                   Descrição
                 </span>
+
                 <input
                   value={form.description}
                   onChange={(event) => updateForm('description', event.target.value)}
@@ -547,6 +696,7 @@ export function TransactionsPage() {
                 <span className="mb-2 block text-sm font-bold text-slate-700">
                   Valor
                 </span>
+
                 <input
                   value={form.amount || ''}
                   onChange={(event) => updateForm('amount', Number(event.target.value))}
@@ -564,6 +714,7 @@ export function TransactionsPage() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Data
                   </span>
+
                   <input
                     value={form.transactionDate}
                     onChange={(event) => updateForm('transactionDate', event.target.value)}
@@ -577,6 +728,7 @@ export function TransactionsPage() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Status
                   </span>
+
                   <select
                     value={form.status}
                     onChange={(event) =>
@@ -594,6 +746,7 @@ export function TransactionsPage() {
                 <span className="mb-2 block text-sm font-bold text-slate-700">
                   Conta origem
                 </span>
+
                 <select
                   value={form.accountId}
                   onChange={(event) => updateForm('accountId', event.target.value)}
@@ -614,6 +767,7 @@ export function TransactionsPage() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Conta destino
                   </span>
+
                   <select
                     value={form.transferAccountId}
                     onChange={(event) =>
@@ -637,6 +791,7 @@ export function TransactionsPage() {
                   <span className="mb-2 block text-sm font-bold text-slate-700">
                     Categoria
                   </span>
+
                   <select
                     value={form.categoryId}
                     onChange={(event) => updateForm('categoryId', event.target.value)}
@@ -656,6 +811,7 @@ export function TransactionsPage() {
                 <span className="mb-2 block text-sm font-bold text-slate-700">
                   Observações
                 </span>
+
                 <textarea
                   value={form.notes}
                   onChange={(event) => updateForm('notes', event.target.value)}
@@ -674,6 +830,18 @@ export function TransactionsPage() {
           </form>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmAction}
+        title={getConfirmTitle()}
+        description={getConfirmDescription()}
+        confirmLabel={getConfirmLabel()}
+        cancelLabel="Voltar"
+        loading={saving}
+        tone={confirmAction?.type === 'pay' ? 'default' : 'danger'}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={confirmSelectedAction}
+      />
     </div>
   );
 }

@@ -44,8 +44,11 @@ export function ConfirmDialog({
 
             <div>
               <h2 className="text-xl font-black text-slate-950">{title}</h2>
+
               {description && (
-                <p className="mt-2 text-sm leading-6 text-slate-500">{description}</p>
+                <p className="mt-2 text-sm leading-6 text-slate-500">
+                  {description}
+                </p>
               )}
             </div>
           </div>
@@ -53,7 +56,8 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"
+            disabled={loading}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-slate-100 text-slate-600 disabled:opacity-60"
           >
             <X size={20} />
           </button>

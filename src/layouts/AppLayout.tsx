@@ -24,7 +24,11 @@ export function AppLayout() {
 
   function handleLogout() {
     localStorage.removeItem('@EvFinanceiro:token');
-    navigate('/login');
+    localStorage.removeItem('@EvFinanceiro:user');
+
+    navigate('/login', {
+      replace: true,
+    });
   }
 
   return (
@@ -45,10 +49,9 @@ export function AppLayout() {
                 to={item.to}
                 end={item.to === '/'}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${
-                    isActive
-                      ? 'bg-violet-700 text-white shadow-lg shadow-violet-200'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                  `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold transition ${isActive
+                    ? 'bg-violet-700 text-white shadow-lg shadow-violet-200'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
                   }`
                 }
               >

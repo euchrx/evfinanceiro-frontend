@@ -1,11 +1,46 @@
 import type { FormEvent } from 'react';
-import { useState } from 'react';
-import { Eye, LockKeyhole, Mail, User, WalletCards } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import {
+  Eye,
+  EyeOff,
+  LockKeyhole,
+  Mail,
+  User,
+  WalletCards,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 import { api } from '../api/client';
 
 type AuthMode = 'login' | 'register';
+
+type AuthResponse = {
+  accessToken: string;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+  };
+};
+
+type ApiErrorResponse = {
+  response?: {
+    data?: {
+      message?: string | string[];
+    };
+  };
+};
+
+function getApiErrorMessage(error: unknown, fallback: string) {
+  const apiError = error as ApiErrorResponse;
+  const message = apiError.response?.data?.message;
+
+  if (Array.isArray(message)) {
+    return message[0] ?? fallback;
+  }
+
+  return message ?? fallback;
+}
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -13,16 +48,43 @@ export function LoginPage() {
   const [mode, setMode] = useState<AuthMode>('login');
 
   const [name, setName] = useState('');
-  const [email, setEmail] = useState('admin@evfinanceiro.local');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  const [showPassword, setShowPassword] = useState(false);
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+  const token = localStorage.getItem('@EvFinanceiro:token');
+
+  if (token) {
+    navigate('/', {
+      replace: true,
+    });
+  }
+}, [navigate]);
 
   const isRegister = mode === 'register';
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
+
+    if (isRegister && name.trim().length < 2) {
+      setError('Informe seu nome.');
+      return;
+    }
+
+    if (!email.trim()) {
+      setError('Informe seu e-mail.');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('A senha precisa ter pelo menos 6 caracteres.');
+      return;
+    }
 
     try {
       setLoading(true);
@@ -32,25 +94,37 @@ export function LoginPage() {
 
       const payload = isRegister
         ? {
-            name,
-            email,
+            name: name.trim(),
+            email: email.trim().toLowerCase(),
             password,
           }
         : {
-            email,
+            email: email.trim().toLowerCase(),
             password,
           };
 
-      const response = await api.post(endpoint, payload);
+      const response = await api.post<AuthResponse>(endpoint, payload);
 
       localStorage.setItem('@EvFinanceiro:token', response.data.accessToken);
 
-      navigate('/');
-    } catch {
+      if (response.data.user) {
+        localStorage.setItem(
+          '@EvFinanceiro:user',
+          JSON.stringify(response.data.user),
+        );
+      }
+
+      navigate('/', {
+        replace: true,
+      });
+    } catch (error) {
       setError(
-        isRegister
-          ? 'Não foi possível criar sua conta.'
-          : 'E-mail ou senha inválidos.',
+        getApiErrorMessage(
+          error,
+          isRegister
+            ? 'Não foi possível criar sua conta.'
+            : 'E-mail ou senha inválidos.',
+        ),
       );
     } finally {
       setLoading(false);
@@ -59,17 +133,16 @@ export function LoginPage() {
 
   function toggleMode() {
     setError('');
+    setShowPassword(false);
+    setPassword('');
 
     if (mode === 'login') {
       setMode('register');
-      setEmail('');
-      setPassword('');
       return;
     }
 
     setMode('login');
-    setEmail('admin@evfinanceiro.local');
-    setPassword('admin123');
+    setName('');
   }
 
   return (
@@ -128,6 +201,7 @@ export function LoginPage() {
                   onChange={(event) => setName(event.target.value)}
                   className="w-full bg-transparent text-sm outline-none"
                   placeholder="Seu nome"
+                  autoComplete="name"
                   required={isRegister}
                 />
               </div>
@@ -148,6 +222,9 @@ export function LoginPage() {
                 className="w-full bg-transparent text-sm outline-none"
                 placeholder="seu@email.com"
                 type="email"
+                autoCapitalize="none"
+                autoComplete="email"
+                inputMode="email"
                 required
               />
             </div>
@@ -164,14 +241,21 @@ export function LoginPage() {
               <input
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 className="w-full bg-transparent text-sm outline-none"
                 placeholder="Digite sua senha"
+                autoComplete={isRegister ? 'new-password' : 'current-password'}
                 minLength={6}
                 required
               />
 
-              <Eye size={18} className="text-slate-400" />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                className="text-slate-400"
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
           </label>
 
@@ -192,7 +276,8 @@ export function LoginPage() {
             <button
               type="button"
               onClick={toggleMode}
-              className="text-sm font-bold text-violet-700"
+              disabled={loading}
+              className="text-sm font-bold text-violet-700 disabled:opacity-60"
             >
               {isRegister
                 ? 'Já tem conta? Entrar'

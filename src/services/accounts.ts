@@ -19,11 +19,7 @@ type PaginatedAccounts = {
 };
 
 export async function listAccounts() {
-  const response = await api.get<PaginatedAccounts>('/accounts', {
-    params: {
-      take: 100,
-    },
-  });
+  const response = await api.get<PaginatedAccounts>('/accounts');
 
   return response.data.items;
 }

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 
 import type { Category, CategoryType } from '../types/finance';

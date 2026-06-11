@@ -4,8 +4,8 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
+import type { ReactNode } from 'react';
 import {
-  ReactNode,
   createContext,
   useContext,
   useMemo,

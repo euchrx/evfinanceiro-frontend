@@ -48,6 +48,21 @@ function hiddenValue() {
   return 'R$ •••••';
 }
 
+function formatDateBR(value?: string | null) {
+  if (!value) {
+    return '-';
+  }
+
+  const datePart = value.slice(0, 10);
+  const [year, month, day] = datePart.split('-');
+
+  if (!year || !month || !day) {
+    return '-';
+  }
+
+  return `${day}/${month}/${year}`;
+}
+
 export function DashboardPage() {
   const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -169,7 +184,7 @@ export function DashboardPage() {
                   </p>
 
                   <strong className="mt-2 block text-lg text-slate-950">
-                    {showBalance ? money(account.balance) : hiddenValue()}
+                    {showBalance ? money(Number(account.balance)) : hiddenValue()}
                   </strong>
                 </div>
               ))}
@@ -194,9 +209,7 @@ export function DashboardPage() {
                 <TransactionCard
                   key={transaction.id}
                   description={transaction.description}
-                  date={new Date(transaction.transactionDate).toLocaleDateString(
-                    'pt-BR',
-                  )}
+                  date={formatDateBR(transaction.transactionDate)}
                   account={transaction.account?.name}
                   category={transaction.category?.name}
                   type={transaction.type}

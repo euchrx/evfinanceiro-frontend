@@ -1,13 +1,18 @@
 import type { FormEvent } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDownLeft,
   ArrowRightLeft,
   ArrowUpRight,
+  Camera,
   CheckCircle2,
+  FileUp,
   Filter,
+  Loader2,
   MoreVertical,
   Plus,
+  ReceiptText,
   RefreshCcw,
   Trash2,
   X,
@@ -15,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { api } from '../api/client';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { useToast } from '../components/ToastProvider';
 import { listAccounts } from '../services/accounts';
@@ -51,6 +57,32 @@ type ConfirmAction =
     }
   | null;
 
+type ProofUploadStatus = 'CREATED' | 'NEEDS_REVIEW' | 'DUPLICATE';
+
+type ProofUploadResult = {
+  status: ProofUploadStatus;
+  message: string;
+  parsed: {
+    rawText?: string;
+    amount: number | null;
+    transactionDate: string | null;
+    payerName: string | null;
+    recipientName: string | null;
+    bankName: string | null;
+    pixKey: string | null;
+    endToEndId: string | null;
+    confidence: number;
+    warnings: string[];
+  };
+  transaction?: FinancialTransaction | null;
+};
+
+type ProofFormState = {
+  type: TransactionType;
+  accountId: string;
+  categoryId: string;
+};
+
 function money(value: number | string) {
   return Number(value).toLocaleString('pt-BR', {
     style: 'currency',
@@ -66,6 +98,21 @@ function toInputDate(date = new Date()) {
   return `${year}-${month}-${day}`;
 }
 
+function toInputDateFromApi(value?: string | null) {
+  if (!value) {
+    return today;
+  }
+
+  const [dateOnly] = value.split('T');
+  const [year, month, day] = dateOnly.split('-');
+
+  if (!year || !month || !day) {
+    return today;
+  }
+
+  return `${year}-${month}-${day}`;
+}
+
 function formatDate(date: string) {
   const [dateOnly] = date.split('T');
   const [year, month, day] = dateOnly.split('-');
@@ -75,6 +122,14 @@ function formatDate(date: string) {
   }
 
   return new Date(date).toLocaleDateString('pt-BR');
+}
+
+function formatOptionalDate(date?: string | null) {
+  if (!date) {
+    return '-';
+  }
+
+  return formatDate(date);
 }
 
 const transactionTypeLabels: Record<TransactionType, string> = {
@@ -89,12 +144,21 @@ const statusLabels: Record<TransactionStatus, string> = {
   CANCELED: 'Cancelado',
 };
 
+const proofStatusLabels: Record<ProofUploadStatus, string> = {
+  CREATED: 'Movimentação criada',
+  NEEDS_REVIEW: 'Precisa de conferência',
+  DUPLICATE: 'Possível duplicidade',
+};
+
 const today = toInputDate();
 
 export function TransactionsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const toast = useToast();
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
   const [accounts, setAccounts] = useState<FinancialAccount[]>([]);
@@ -103,8 +167,12 @@ export function TransactionsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  const [uploadingProof, setUploadingProof] = useState(false);
+  const [proofResult, setProofResult] = useState<ProofUploadResult | null>(null);
+
   const [showForm, setShowForm] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [showProofPanel, setShowProofPanel] = useState(false);
   const [openedMenuId, setOpenedMenuId] = useState<string | null>(null);
 
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
@@ -112,6 +180,12 @@ export function TransactionsPage() {
   const [filters, setFilters] = useState<TransactionFilters>({
     type: '',
     status: '',
+  });
+
+  const [proofForm, setProofForm] = useState<ProofFormState>({
+    type: 'EXPENSE',
+    accountId: '',
+    categoryId: '',
   });
 
   const [form, setForm] = useState<CreateTransactionPayload>({
@@ -140,6 +214,16 @@ export function TransactionsPage() {
     });
   }, [categories, form.type]);
 
+  const proofFilteredCategories = useMemo(() => {
+    return categories.filter((category) => {
+      if (proofForm.type === 'INCOME') {
+        return category.type === 'INCOME';
+      }
+
+      return category.type === 'EXPENSE';
+    });
+  }, [categories, proofForm.type]);
+
   async function loadData() {
     setLoading(true);
 
@@ -154,6 +238,11 @@ export function TransactionsPage() {
       setTransactions(transactionsResponse.items);
       setAccounts(accountsResponse);
       setCategories(categoriesResponse);
+
+      setProofForm((current) => ({
+        ...current,
+        accountId: current.accountId || accountsResponse[0]?.id || '',
+      }));
     } catch (error) {
       console.error('Erro ao carregar movimentações:', error);
       toast.error('Não foi possível carregar as movimentações.');
@@ -172,12 +261,22 @@ export function TransactionsPage() {
       | {
           openCreateModal?: boolean;
           transactionType?: TransactionType;
+          openProofUpload?: boolean;
         }
       | null;
 
     if (state?.openCreateModal) {
       resetForm(state.transactionType ?? 'EXPENSE');
       setShowForm(true);
+
+      navigate(location.pathname, {
+        replace: true,
+        state: null,
+      });
+    }
+
+    if (state?.openProofUpload) {
+      setShowProofPanel(true);
 
       navigate(location.pathname, {
         replace: true,
@@ -197,6 +296,17 @@ export function TransactionsPage() {
     }));
   }
 
+  function updateProofForm<K extends keyof ProofFormState>(
+    key: K,
+    value: ProofFormState[K],
+  ) {
+    setProofForm((current) => ({
+      ...current,
+      [key]: value,
+      categoryId: key === 'type' ? '' : current.categoryId,
+    }));
+  }
+
   function resetForm(type: TransactionType = 'EXPENSE') {
     setForm({
       description: '',
@@ -209,6 +319,43 @@ export function TransactionsPage() {
       transferAccountId: '',
       notes: '',
     });
+  }
+
+  function fillFormFromProof(result: ProofUploadResult) {
+    const parsed = result.parsed;
+
+    const description =
+      parsed.recipientName ||
+      parsed.payerName ||
+      parsed.bankName ||
+      'Movimentação importada por comprovante';
+
+    const notes = [
+      'Dados preenchidos automaticamente pela leitura do comprovante.',
+      parsed.endToEndId ? `Identificador/EndToEnd: ${parsed.endToEndId}` : null,
+      parsed.pixKey ? `Chave Pix: ${parsed.pixKey}` : null,
+      parsed.payerName ? `Pagador: ${parsed.payerName}` : null,
+      parsed.recipientName ? `Destinatário: ${parsed.recipientName}` : null,
+      parsed.bankName ? `Banco: ${parsed.bankName}` : null,
+      `Confiança da leitura: ${parsed.confidence}%`,
+      parsed.warnings.length ? `Avisos: ${parsed.warnings.join(' | ')}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    setForm({
+      description,
+      type: proofForm.type,
+      amount: parsed.amount ?? 0,
+      transactionDate: toInputDateFromApi(parsed.transactionDate),
+      status: 'PAID',
+      accountId: proofForm.accountId,
+      categoryId: proofForm.categoryId,
+      transferAccountId: '',
+      notes,
+    });
+
+    setShowForm(true);
   }
 
   async function handleCreate(event: FormEvent) {
@@ -262,6 +409,71 @@ export function TransactionsPage() {
       toast.error('Não foi possível criar a movimentação.');
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleProofFile(file?: File | null) {
+    if (!file) {
+      return;
+    }
+
+    if (!proofForm.accountId) {
+      toast.error('Selecione a conta antes de enviar o comprovante.');
+      return;
+    }
+
+    try {
+      setUploadingProof(true);
+      setProofResult(null);
+
+      const formData = new FormData();
+
+      formData.append('file', file);
+      formData.append('type', proofForm.type);
+      formData.append('accountId', proofForm.accountId);
+      formData.append('autoCreate', 'true');
+
+      if (proofForm.categoryId) {
+        formData.append('categoryId', proofForm.categoryId);
+      }
+
+      const response = await api.post<ProofUploadResult>(
+        '/financial-transactions/payment-proof/upload',
+        formData,
+        {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        },
+      );
+
+      setProofResult(response.data);
+
+      if (response.data.status === 'CREATED') {
+        toast.success('Comprovante lido e movimentação lançada.');
+        await loadData();
+        return;
+      }
+
+      if (response.data.status === 'DUPLICATE') {
+        toast.error('Este comprovante parece já ter sido lançado.');
+        return;
+      }
+
+      toast.error('Comprovante lido, mas precisa de conferência manual.');
+    } catch (error) {
+      console.error('Erro ao enviar comprovante:', error);
+      toast.error('Não foi possível ler o comprovante.');
+    } finally {
+      setUploadingProof(false);
+
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+
+      if (cameraInputRef.current) {
+        cameraInputRef.current.value = '';
+      }
     }
   }
 
@@ -377,6 +589,22 @@ export function TransactionsPage() {
     );
   }
 
+  function renderProofStatus(status: ProofUploadStatus) {
+    return (
+      <span
+        className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+          status === 'CREATED'
+            ? 'bg-emerald-50 text-emerald-700'
+            : status === 'DUPLICATE'
+              ? 'bg-red-50 text-red-700'
+              : 'bg-amber-50 text-amber-700'
+        }`}
+      >
+        {proofStatusLabels[status]}
+      </span>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 pb-24 md:pb-8">
       <section className="rounded-b-[2.5rem] bg-gradient-to-br from-violet-950 via-violet-800 to-fuchsia-700 px-5 pb-8 pt-7 text-white md:rounded-none md:px-8">
@@ -390,7 +618,7 @@ export function TransactionsPage() {
               </h1>
 
               <p className="mt-2 text-sm text-violet-100">
-                Receitas, despesas e transferências.
+                Receitas, despesas, transferências e lançamentos por comprovante.
               </p>
             </div>
 
@@ -417,11 +645,276 @@ export function TransactionsPage() {
                 </button>
               ),
             )}
+
+            <button
+              type="button"
+              onClick={() => setShowProofPanel((value) => !value)}
+              className="flex min-w-max items-center gap-2 rounded-2xl bg-violet-100 px-4 py-3 text-sm font-bold text-violet-900 shadow-lg shadow-violet-950/20"
+            >
+              <ReceiptText size={17} />
+              Lançar por comprovante
+            </button>
           </div>
         </div>
       </section>
 
       <section className="mx-auto max-w-6xl space-y-5 px-5 py-6 md:px-8">
+        {showProofPanel && (
+          <div className="rounded-[2rem] border border-violet-100 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-violet-700">
+                  <ReceiptText size={21} />
+                </div>
+
+                <div>
+                  <h2 className="text-base font-black text-slate-950">
+                    Lançar movimentação por comprovante
+                  </h2>
+
+                  <p className="mt-1 text-sm text-slate-500">
+                    Tire uma foto ou envie um PDF. O sistema vai tentar
+                    identificar valor, data, banco, pagador e destinatário.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProofPanel(false);
+                  setProofResult(null);
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <label>
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Tipo
+                </span>
+
+                <select
+                  value={proofForm.type}
+                  onChange={(event) =>
+                    updateProofForm('type', event.target.value as TransactionType)
+                  }
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                >
+                  <option value="EXPENSE">Despesa</option>
+                  <option value="INCOME">Receita</option>
+                </select>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Conta
+                </span>
+
+                <select
+                  value={proofForm.accountId}
+                  onChange={(event) =>
+                    updateProofForm('accountId', event.target.value)
+                  }
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                >
+                  <option value="">Selecione</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                <span className="mb-2 block text-sm font-bold text-slate-700">
+                  Categoria
+                </span>
+
+                <select
+                  value={proofForm.categoryId}
+                  onChange={(event) =>
+                    updateProofForm('categoryId', event.target.value)
+                  }
+                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
+                >
+                  <option value="">Sem categoria</option>
+                  {proofFilteredCategories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                disabled={uploadingProof}
+                onClick={() => cameraInputRef.current?.click()}
+                className="flex items-center justify-center gap-2 rounded-2xl bg-violet-700 px-4 py-3 text-sm font-black text-white disabled:opacity-60"
+              >
+                {uploadingProof ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <Camera size={18} />
+                )}
+                Tirar foto do comprovante
+              </button>
+
+              <button
+                type="button"
+                disabled={uploadingProof}
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 disabled:opacity-60"
+              >
+                {uploadingProof ? (
+                  <Loader2 size={18} className="animate-spin" />
+                ) : (
+                  <FileUp size={18} />
+                )}
+                Anexar comprovante
+              </button>
+            </div>
+
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={(event) => handleProofFile(event.target.files?.[0])}
+            />
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,.pdf,application/pdf"
+              className="hidden"
+              onChange={(event) => handleProofFile(event.target.files?.[0])}
+            />
+
+            {proofResult && (
+              <div className="mt-4 rounded-[1.5rem] border border-slate-100 bg-slate-50 p-4">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-black text-slate-950">
+                        Resultado da leitura
+                      </h3>
+                      {renderProofStatus(proofResult.status)}
+                    </div>
+
+                    <p className="mt-1 text-sm text-slate-500">
+                      {proofResult.message}
+                    </p>
+                  </div>
+
+                  {proofResult.status === 'NEEDS_REVIEW' && (
+                    <button
+                      type="button"
+                      onClick={() => fillFormFromProof(proofResult)}
+                      className="rounded-2xl bg-violet-700 px-4 py-2 text-xs font-black text-white"
+                    >
+                      Revisar e lançar
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid gap-2 text-sm md:grid-cols-3">
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">Valor</p>
+                    <p className="mt-1 font-black text-slate-950">
+                      {proofResult.parsed.amount !== null
+                        ? money(proofResult.parsed.amount)
+                        : '-'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">Data</p>
+                    <p className="mt-1 font-black text-slate-950">
+                      {formatOptionalDate(proofResult.parsed.transactionDate)}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">
+                      Confiança
+                    </p>
+                    <p className="mt-1 font-black text-slate-950">
+                      {proofResult.parsed.confidence}%
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">Pagador</p>
+                    <p className="mt-1 break-words font-black text-slate-950">
+                      {proofResult.parsed.payerName ?? '-'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">
+                      Destinatário
+                    </p>
+                    <p className="mt-1 break-words font-black text-slate-950">
+                      {proofResult.parsed.recipientName ?? '-'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">Banco</p>
+                    <p className="mt-1 break-words font-black text-slate-950">
+                      {proofResult.parsed.bankName ?? '-'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3 md:col-span-2">
+                    <p className="text-xs font-bold text-slate-500">
+                      Chave Pix
+                    </p>
+                    <p className="mt-1 break-words font-black text-slate-950">
+                      {proofResult.parsed.pixKey ?? '-'}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl bg-white p-3">
+                    <p className="text-xs font-bold text-slate-500">
+                      Identificador
+                    </p>
+                    <p className="mt-1 break-words font-black text-slate-950">
+                      {proofResult.parsed.endToEndId ?? '-'}
+                    </p>
+                  </div>
+                </div>
+
+                {proofResult.parsed.warnings.length > 0 && (
+                  <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-amber-700">
+                      <AlertTriangle size={16} />
+                      <p className="text-xs font-black uppercase tracking-wide">
+                        Conferência necessária
+                      </p>
+                    </div>
+
+                    <ul className="space-y-1 text-xs font-medium text-amber-800">
+                      {proofResult.parsed.warnings.map((warning) => (
+                        <li key={warning}>• {warning}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div
           className={`rounded-[2rem] border border-slate-100 bg-white p-4 shadow-sm ${
             showFilters ? 'block' : 'hidden md:block'
@@ -557,7 +1050,9 @@ export function TransactionsPage() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setOpenedMenuId(menuOpen ? null : transaction.id)
+                                  setOpenedMenuId(
+                                    menuOpen ? null : transaction.id,
+                                  )
                                 }
                                 className="flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-50 text-slate-500"
                               >
@@ -687,7 +1182,9 @@ export function TransactionsPage() {
 
                 <input
                   value={form.description}
-                  onChange={(event) => updateForm('description', event.target.value)}
+                  onChange={(event) =>
+                    updateForm('description', event.target.value)
+                  }
                   className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
                   placeholder="Ex: Mercado, salário, transferência..."
                   required
@@ -701,7 +1198,9 @@ export function TransactionsPage() {
 
                 <input
                   value={form.amount || ''}
-                  onChange={(event) => updateForm('amount', Number(event.target.value))}
+                  onChange={(event) =>
+                    updateForm('amount', Number(event.target.value))
+                  }
                   type="number"
                   step="0.01"
                   min="0.01"
@@ -719,7 +1218,9 @@ export function TransactionsPage() {
 
                   <input
                     value={form.transactionDate}
-                    onChange={(event) => updateForm('transactionDate', event.target.value)}
+                    onChange={(event) =>
+                      updateForm('transactionDate', event.target.value)
+                    }
                     type="date"
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
                     required
@@ -796,7 +1297,9 @@ export function TransactionsPage() {
 
                   <select
                     value={form.categoryId}
-                    onChange={(event) => updateForm('categoryId', event.target.value)}
+                    onChange={(event) =>
+                      updateForm('categoryId', event.target.value)
+                    }
                     className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none"
                   >
                     <option value="">Sem categoria</option>

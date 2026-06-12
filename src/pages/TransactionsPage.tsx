@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode } from 'react';
+import type { FormEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -12,10 +12,10 @@ import {
   Filter,
   Loader2,
   MoreHorizontal,
-  Plus,
   ReceiptText,
   RefreshCcw,
   Search,
+  ShieldCheck,
   Trash2,
   X,
   XCircle,
@@ -46,17 +46,17 @@ import type {
 
 type ConfirmAction =
   | {
-      type: 'delete';
-      transaction: FinancialTransaction;
-    }
+    type: 'delete';
+    transaction: FinancialTransaction;
+  }
   | {
-      type: 'pay';
-      transaction: FinancialTransaction;
-    }
+    type: 'pay';
+    transaction: FinancialTransaction;
+  }
   | {
-      type: 'cancel';
-      transaction: FinancialTransaction;
-    }
+    type: 'cancel';
+    transaction: FinancialTransaction;
+  }
   | null;
 
 type ProofUploadStatus = 'CREATED' | 'NEEDS_REVIEW' | 'DUPLICATE';
@@ -90,7 +90,22 @@ type SortableFinancialTransaction = FinancialTransaction & {
   updatedAt?: string | null;
 };
 
-type ViewMode = 'ALL' | 'PENDING' | 'HISTORY';
+type ViewMode = 'ALL' | 'PENDING' | 'PAID' | 'CANCELED';
+
+type MonthlyComparisonData = {
+  currentLabel: string;
+  previousLabel: string;
+  currentIncome: number;
+  currentExpense: number;
+  currentPending: number;
+  currentResult: number;
+  currentCount: number;
+  previousIncome: number;
+  previousExpense: number;
+  previousPending: number;
+  previousResult: number;
+  previousCount: number;
+};
 
 const transactionTypeLabels: Record<TransactionType, string> = {
   INCOME: 'Receita',
@@ -119,9 +134,9 @@ function money(value: number | string) {
 
   return Number.isFinite(parsed)
     ? parsed.toLocaleString('pt-BR', {
-        style: 'currency',
-        currency: 'BRL',
-      })
+      style: 'currency',
+      currency: 'BRL',
+    })
     : 'R$ 0,00';
 }
 
@@ -177,6 +192,80 @@ function formatOptionalDate(date?: string | null) {
   return formatDate(date);
 }
 
+function getDateKey(date: string) {
+  const [dateOnly] = date.split('T');
+
+  return dateOnly || date;
+}
+
+function getDatePart(value: string) {
+  return value.split('T')[0] || value;
+}
+
+function parseDatePart(value: string) {
+  const [year, month, day] = value.split('-').map(Number);
+
+  return new Date(year, month - 1, day);
+}
+
+function formatDatePart(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+
+  return `${year}-${month}-${day}`;
+}
+
+function addDays(date: Date, days: number) {
+  const nextDate = new Date(date);
+
+  nextDate.setDate(nextDate.getDate() + days);
+
+  return nextDate;
+}
+
+function diffDays(startDate: string, endDate: string) {
+  const start = parseDatePart(startDate).getTime();
+  const end = parseDatePart(endDate).getTime();
+
+  const difference = Math.round((end - start) / 86_400_000);
+
+  return Math.max(difference, 0);
+}
+
+function isBetweenDates(date: string, startDate: string, endDate: string) {
+  const current = getDatePart(date);
+
+  return current >= startDate && current <= endDate;
+}
+
+function getMonthKey(value: string) {
+  return getDatePart(value).slice(0, 7);
+}
+
+function getCurrentMonthKey() {
+  return today.slice(0, 7);
+}
+
+function getPreviousMonthKey(monthKey: string) {
+  const [year, month] = monthKey.split('-').map(Number);
+  const date = new Date(year, month - 2, 1);
+
+  const previousYear = date.getFullYear();
+  const previousMonth = String(date.getMonth() + 1).padStart(2, '0');
+
+  return `${previousYear}-${previousMonth}`;
+}
+
+function formatMonthLabel(monthKey: string) {
+  const [year, month] = monthKey.split('-').map(Number);
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(year, month - 1, 1));
+}
+
 function getSortableDate(transaction: SortableFinancialTransaction) {
   const referenceDate =
     transaction.createdAt ?? transaction.updatedAt ?? transaction.transactionDate;
@@ -203,13 +292,170 @@ function sortNewestFirst(transactions: FinancialTransaction[]) {
   });
 }
 
+function calculatePeriodTotals(transactions: FinancialTransaction[]) {
+  return transactions
+    .filter((transaction) => transaction.status !== 'CANCELED')
+    .reduce(
+      (totals, transaction) => {
+        const amount = Number(transaction.amount);
+
+        if (transaction.type === 'INCOME') {
+          totals.income += amount;
+        }
+
+        if (transaction.type === 'EXPENSE') {
+          totals.expense += amount;
+        }
+
+        if (transaction.status === 'PENDING') {
+          totals.pending += amount;
+        }
+
+        totals.count += 1;
+
+        return totals;
+      },
+      {
+        income: 0,
+        expense: 0,
+        pending: 0,
+        count: 0,
+      },
+    );
+}
+
+function getResultLabel(value: number) {
+  if (value > 0) {
+    return 'Resultado positivo';
+  }
+
+  if (value < 0) {
+    return 'Resultado negativo';
+  }
+
+  return 'Resultado zerado';
+}
+
+function getVariationLabel(value: number) {
+  if (value > 0) {
+    return 'melhor que o período anterior';
+  }
+
+  if (value < 0) {
+    return 'abaixo do período anterior';
+  }
+
+  return 'igual ao período anterior';
+}
+
+function getComparisonInsight({
+  resultDifference,
+  expenseDifference,
+}: {
+  resultDifference: number;
+  expenseDifference: number;
+}) {
+  if (resultDifference > 0 && expenseDifference <= 0) {
+    return 'Seu resultado melhorou e as despesas ficaram controladas.';
+  }
+
+  if (resultDifference > 0 && expenseDifference > 0) {
+    return 'Seu resultado melhorou, mas as despesas também subiram.';
+  }
+
+  if (resultDifference < 0 && expenseDifference > 0) {
+    return 'Atenção: o resultado caiu e as despesas aumentaram.';
+  }
+
+  if (resultDifference < 0) {
+    return 'O resultado ficou abaixo do período anterior.';
+  }
+
+  return 'O período está equilibrado em relação ao anterior.';
+}
+
+function matchesSmartSearch(
+  transaction: FinancialTransaction,
+  searchValue: string,
+) {
+  const search = normalizeText(searchValue);
+
+  if (!search) {
+    return true;
+  }
+
+  const amount = Number(transaction.amount);
+  const amountFormatted = money(amount);
+  const dateFormatted = formatDate(transaction.transactionDate);
+
+  const searchableText = normalizeText(
+    [
+      transaction.description,
+      transaction.type,
+      transactionTypeLabels[transaction.type],
+      transaction.status,
+      statusLabels[transaction.status],
+      transaction.account?.name,
+      transaction.category?.name,
+      transaction.transferAccount?.name,
+      amount,
+      amountFormatted,
+      dateFormatted,
+      transaction.transactionDate,
+    ].join(' '),
+  );
+
+  if (searchableText.includes(search)) {
+    return true;
+  }
+
+  if (search.includes('pago') && transaction.status === 'PAID') {
+    return true;
+  }
+
+  if (search.includes('pendente') && transaction.status === 'PENDING') {
+    return true;
+  }
+
+  if (search.includes('cancelado') && transaction.status === 'CANCELED') {
+    return true;
+  }
+
+  if (
+    (search.includes('gasto') ||
+      search.includes('despesa') ||
+      search.includes('saida')) &&
+    transaction.type === 'EXPENSE'
+  ) {
+    return true;
+  }
+
+  if (
+    (search.includes('receita') ||
+      search.includes('entrada') ||
+      search.includes('ganho')) &&
+    transaction.type === 'INCOME'
+  ) {
+    return true;
+  }
+
+  if (
+    (search.includes('transferencia') || search.includes('transferir')) &&
+    transaction.type === 'TRANSFER'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function getTransactionTone(type: TransactionType) {
   if (type === 'INCOME') {
     return {
       icon: ArrowDownLeft,
       iconClass: 'bg-emerald-50 text-emerald-600',
       amountClass: 'text-emerald-600',
-      softClass: 'bg-emerald-50 text-emerald-700',
+      barClass: 'bg-emerald-500',
       prefix: '+',
     };
   }
@@ -219,7 +465,7 @@ function getTransactionTone(type: TransactionType) {
       icon: ArrowUpRight,
       iconClass: 'bg-red-50 text-red-600',
       amountClass: 'text-red-600',
-      softClass: 'bg-red-50 text-red-700',
+      barClass: 'bg-red-500',
       prefix: '-',
     };
   }
@@ -228,7 +474,7 @@ function getTransactionTone(type: TransactionType) {
     icon: ArrowRightLeft,
     iconClass: 'bg-blue-50 text-blue-700',
     amountClass: 'text-blue-700',
-    softClass: 'bg-blue-50 text-blue-700',
+    barClass: 'bg-blue-600',
     prefix: '',
   };
 }
@@ -263,139 +509,221 @@ function ProofStatusBadge({ status }: { status: ProofUploadStatus }) {
   );
 }
 
-type SummaryTileProps = {
-  title: string;
-  value: string;
-  icon: ReactNode;
-  tone?: 'neutral' | 'income' | 'expense' | 'pending';
-};
-
-function SummaryTile({ title, value, icon, tone = 'neutral' }: SummaryTileProps) {
-  const toneClass = {
-    neutral: 'bg-slate-50 text-slate-700',
-    income: 'bg-emerald-50 text-emerald-700',
-    expense: 'bg-red-50 text-red-700',
-    pending: 'bg-amber-50 text-amber-700',
-  };
-
-  return (
-    <article className="rounded-[1.45rem] border border-slate-200 bg-white p-4 shadow-[0_10px_30px_rgba(15,23,42,0.045)]">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-slate-500">{title}</p>
-
-          <strong className="mt-2 block truncate text-lg font-black tracking-tight text-slate-950">
-            {value}
-          </strong>
-        </div>
-
-        <div
-          className={cn(
-            'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl',
-            toneClass[tone],
-          )}
-        >
-          {icon}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-type ActionButtonProps = {
-  title: string;
-  description: string;
-  icon: ReactNode;
-  onClick: () => void;
-  tone?: 'dark' | 'income' | 'expense' | 'neutral';
-};
-
-function ActionButton({
-  title,
-  description,
-  icon,
-  onClick,
-  tone = 'neutral',
-}: ActionButtonProps) {
-  const toneClass = {
-    dark: 'bg-slate-950 text-white border-slate-950 shadow-[0_16px_36px_rgba(15,23,42,0.16)]',
-    income: 'bg-emerald-50 text-emerald-700 border-emerald-100',
-    expense: 'bg-red-50 text-red-700 border-red-100',
-    neutral: 'bg-white text-slate-950 border-slate-200',
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex min-w-[190px] items-center gap-3 rounded-[1.45rem] border p-3 text-left transition duration-200 hover:-translate-y-0.5',
-        toneClass[tone],
-      )}
-    >
-      <div
-        className={cn(
-          'flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl',
-          tone === 'dark' ? 'bg-white text-slate-950' : 'bg-white/70',
-        )}
-      >
-        {icon}
-      </div>
-
-      <div className="min-w-0">
-        <strong className="block truncate text-sm font-black">{title}</strong>
-        <p
-          className={cn(
-            'mt-0.5 line-clamp-1 text-xs font-semibold',
-            tone === 'dark' ? 'text-slate-300' : 'text-slate-500',
-          )}
-        >
-          {description}
+function MonthlyComparisonInsight({
+  comparison,
+}: {
+  comparison: MonthlyComparisonData | null;
+}) {
+  if (!comparison) {
+    return (
+      <section className="mt-4 rounded-[1.6rem] border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+        <p className="text-sm font-bold text-slate-500">
+          Ainda não há dados suficientes para comparar períodos.
         </p>
+      </section>
+    );
+  }
+
+  if (comparison.previousCount === 0) {
+    return (
+      <section className="mt-4 overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-[0_14px_38px_rgba(15,23,42,0.055)]">
+        <div className="grid grid-cols-[5px_1fr]">
+          <div className="bg-blue-700" />
+
+          <div className="p-5">
+            <p className="text-sm font-semibold text-slate-500">
+              Comparativo do período
+            </p>
+
+            <h2 className="mt-1 text-xl font-black tracking-tight text-slate-950 md:text-2xl">
+              {comparison.currentLabel}
+            </h2>
+
+            <p className="mt-2 max-w-xl text-sm font-medium text-slate-500">
+              Ainda não existe movimentação no período anterior para comparar.
+            </p>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700">
+                <ReceiptText size={14} />
+                {comparison.currentCount} lançamentos neste período
+              </span>
+
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600">
+                Período anterior sem lançamentos
+              </span>
+            </div>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const resultDifference = comparison.currentResult - comparison.previousResult;
+  const incomeDifference = comparison.currentIncome - comparison.previousIncome;
+  const expenseDifference =
+    comparison.currentExpense - comparison.previousExpense;
+
+  const resultIsBetter = resultDifference >= 0;
+
+  return (
+    <section className="mt-4 overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-[0_14px_38px_rgba(15,23,42,0.055)]">
+      <div className="grid grid-cols-[5px_1fr]">
+        <div className={resultIsBetter ? 'bg-blue-700' : 'bg-red-600'} />
+
+        <div className="p-5">
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-500">
+                Comparativo do período
+              </p>
+
+              <h2 className="mt-1 text-xl font-black tracking-tight text-slate-950 md:text-2xl">
+                {comparison.currentLabel}
+              </h2>
+
+              <p className="mt-2 max-w-xl text-sm font-medium text-slate-500">
+                {getComparisonInsight({
+                  resultDifference,
+                  expenseDifference,
+                })}
+              </p>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-black',
+                    resultIsBetter
+                      ? 'bg-blue-50 text-blue-700'
+                      : 'bg-red-50 text-red-700',
+                  )}
+                >
+                  <ShieldCheck size={14} />
+                  {money(Math.abs(resultDifference))}{' '}
+                  {getVariationLabel(resultDifference)}
+                </span>
+
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600">
+                  <ReceiptText size={14} />
+                  {comparison.currentCount} lançamentos
+                </span>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[420px]">
+              <div className="rounded-[1.35rem] border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-500">
+                  Resultado atual
+                </p>
+
+                <strong
+                  className={cn(
+                    'mt-2 block text-2xl font-black tracking-tight',
+                    comparison.currentResult >= 0
+                      ? 'text-slate-950'
+                      : 'text-red-600',
+                  )}
+                >
+                  {money(comparison.currentResult)}
+                </strong>
+              </div>
+
+              <div className="rounded-[1.35rem] border border-slate-200 bg-slate-50 p-4">
+                <p className="text-sm font-semibold text-slate-500">
+                  Período anterior
+                </p>
+
+                <strong
+                  className={cn(
+                    'mt-2 block text-2xl font-black tracking-tight',
+                    comparison.previousResult >= 0
+                      ? 'text-slate-950'
+                      : 'text-red-600',
+                  )}
+                >
+                  {money(comparison.previousResult)}
+                </strong>
+
+                <p className="mt-1 truncate text-xs font-bold text-slate-400">
+                  {comparison.previousLabel}
+                </p>
+              </div>
+
+              <div className="rounded-[1.35rem] border border-emerald-100 bg-emerald-50 p-4">
+                <p className="text-sm font-semibold text-emerald-700">
+                  Entradas
+                </p>
+
+                <strong className="mt-2 block text-lg font-black text-emerald-700">
+                  {money(comparison.currentIncome)}
+                </strong>
+
+                <p className="mt-1 text-xs font-bold text-emerald-700/70">
+                  {incomeDifference >= 0 ? '+' : '-'}
+                  {money(Math.abs(incomeDifference))} vs anterior
+                </p>
+              </div>
+
+              <div className="rounded-[1.35rem] border border-red-100 bg-red-50 p-4">
+                <p className="text-sm font-semibold text-red-700">Saídas</p>
+
+                <strong className="mt-2 block text-lg font-black text-red-700">
+                  {money(comparison.currentExpense)}
+                </strong>
+
+                <p className="mt-1 text-xs font-bold text-red-700/70">
+                  {expenseDifference >= 0 ? '+' : '-'}
+                  {money(Math.abs(expenseDifference))} vs anterior
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </button>
+    </section>
   );
 }
 
-type TransactionItemProps = {
+type TransactionCardProps = {
   transaction: FinancialTransaction;
   menuOpen: boolean;
-  highlighted?: boolean;
   onToggleMenu: () => void;
   onPay: () => void;
   onCancel: () => void;
   onDelete: () => void;
 };
 
-function TransactionItem({
+function TransactionCard({
   transaction,
   menuOpen,
-  highlighted = false,
   onToggleMenu,
   onPay,
   onCancel,
   onDelete,
-}: TransactionItemProps) {
+}: TransactionCardProps) {
   const tone = getTransactionTone(transaction.type);
   const Icon = tone.icon;
+  const pending = transaction.status === 'PENDING';
 
   return (
     <article
       className={cn(
-        'rounded-[1.55rem] border bg-white p-4 transition duration-200',
-        highlighted
-          ? 'border-amber-200 bg-amber-50/35 shadow-[0_14px_34px_rgba(251,191,36,0.1)]'
+        'group relative overflow-hidden rounded-[1.55rem] border bg-white p-4 transition duration-200',
+        pending
+          ? 'border-amber-200 shadow-[0_14px_36px_rgba(251,191,36,0.13)]'
           : 'border-slate-200 shadow-[0_10px_30px_rgba(15,23,42,0.045)] hover:border-slate-300',
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className={cn('absolute bottom-0 left-0 top-0 w-1', tone.barClass)} />
+
+      <div className="flex items-start gap-3 pl-1">
         <div
           className={cn(
-            'flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl',
+            'flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl',
             tone.iconClass,
           )}
         >
-          <Icon size={19} />
+          <Icon size={20} />
         </div>
 
         <div className="min-w-0 flex-1">
@@ -410,7 +738,7 @@ function TransactionItem({
               </div>
 
               <p className="mt-1 truncate text-xs font-medium text-slate-500">
-                {formatDate(transaction.transactionDate)}
+                {transactionTypeLabels[transaction.type]}
                 {transaction.account?.name ? ` • ${transaction.account.name}` : ''}
                 {transaction.category?.name
                   ? ` • ${transaction.category.name}`
@@ -420,12 +748,18 @@ function TransactionItem({
                   : ''}
               </p>
 
-              {highlighted ? (
-                <p className="mt-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-black text-amber-800">
-                  <Clock3 size={13} />
-                  Aguardando pagamento
-                </p>
-              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-black text-slate-500">
+                  {formatDate(transaction.transactionDate)}
+                </span>
+
+                {pending ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-black text-amber-800">
+                    <Clock3 size={13} />
+                    Aguardando pagamento
+                  </span>
+                ) : null}
+              </div>
             </div>
 
             <div className="flex shrink-0 items-start gap-2">
@@ -487,16 +821,20 @@ function TransactionItem({
   );
 }
 
-function EmptyState() {
+function EmptyTransactions() {
   return (
-    <div className="rounded-[1.5rem] border border-dashed border-slate-200 bg-white p-8 text-center">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-        <ReceiptText size={21} />
+    <div className="rounded-[1.6rem] border border-dashed border-slate-200 bg-white p-10 text-center">
+      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+        <ReceiptText size={24} />
       </div>
 
       <strong className="mt-4 block text-sm font-black text-slate-950">
         Nenhuma movimentação encontrada
       </strong>
+
+      <p className="mt-1 text-sm font-medium text-slate-500">
+        Ajuste os filtros ou crie uma nova movimentação.
+      </p>
     </div>
   );
 }
@@ -510,6 +848,9 @@ export function TransactionsPage() {
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
+  const [allTransactions, setAllTransactions] = useState<FinancialTransaction[]>(
+    [],
+  );
   const [accounts, setAccounts] = useState<FinancialAccount[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
 
@@ -580,107 +921,50 @@ export function TransactionsPage() {
   }, [transactions]);
 
   const smartFilteredTransactions = useMemo(() => {
-    const search = normalizeText(smartSearch);
-
-    if (!search) {
-      return sortedTransactions;
-    }
-
-    return sortedTransactions.filter((transaction) => {
-      const amount = Number(transaction.amount);
-      const amountFormatted = money(amount);
-      const dateFormatted = formatDate(transaction.transactionDate);
-
-      const searchableText = normalizeText(
-        [
-          transaction.description,
-          transaction.type,
-          transactionTypeLabels[transaction.type],
-          transaction.status,
-          statusLabels[transaction.status],
-          transaction.account?.name,
-          transaction.category?.name,
-          transaction.transferAccount?.name,
-          amount,
-          amountFormatted,
-          dateFormatted,
-          transaction.transactionDate,
-        ].join(' '),
-      );
-
-      if (searchableText.includes(search)) {
-        return true;
-      }
-
-      if (search.includes('pago') && transaction.status === 'PAID') {
-        return true;
-      }
-
-      if (search.includes('pendente') && transaction.status === 'PENDING') {
-        return true;
-      }
-
-      if (search.includes('cancelado') && transaction.status === 'CANCELED') {
-        return true;
-      }
-
-      if (
-        (search.includes('gasto') ||
-          search.includes('despesa') ||
-          search.includes('saida')) &&
-        transaction.type === 'EXPENSE'
-      ) {
-        return true;
-      }
-
-      if (
-        (search.includes('receita') ||
-          search.includes('entrada') ||
-          search.includes('ganho')) &&
-        transaction.type === 'INCOME'
-      ) {
-        return true;
-      }
-
-      if (
-        (search.includes('transferencia') || search.includes('transferir')) &&
-        transaction.type === 'TRANSFER'
-      ) {
-        return true;
-      }
-
-      return false;
-    });
+    return sortedTransactions.filter((transaction) =>
+      matchesSmartSearch(transaction, smartSearch),
+    );
   }, [smartSearch, sortedTransactions]);
 
-  const pendingTransactions = useMemo(() => {
-    return smartFilteredTransactions.filter(
-      (transaction) => transaction.status === 'PENDING',
-    );
-  }, [smartFilteredTransactions]);
-
-  const historyTransactions = useMemo(() => {
-    return smartFilteredTransactions.filter(
-      (transaction) => transaction.status !== 'PENDING',
-    );
-  }, [smartFilteredTransactions]);
-
-  const visibleTransactions = useMemo(() => {
+  const filteredByView = useMemo(() => {
     if (viewMode === 'PENDING') {
-      return pendingTransactions;
+      return smartFilteredTransactions.filter(
+        (transaction) => transaction.status === 'PENDING',
+      );
     }
 
-    if (viewMode === 'HISTORY') {
-      return historyTransactions;
+    if (viewMode === 'PAID') {
+      return smartFilteredTransactions.filter(
+        (transaction) => transaction.status === 'PAID',
+      );
+    }
+
+    if (viewMode === 'CANCELED') {
+      return smartFilteredTransactions.filter(
+        (transaction) => transaction.status === 'CANCELED',
+      );
     }
 
     return smartFilteredTransactions;
-  }, [
-    historyTransactions,
-    pendingTransactions,
-    smartFilteredTransactions,
-    viewMode,
-  ]);
+  }, [smartFilteredTransactions, viewMode]);
+
+  const groupedTransactions = useMemo(() => {
+    const groups = new Map<string, FinancialTransaction[]>();
+
+    filteredByView.forEach((transaction) => {
+      const key = getDateKey(transaction.transactionDate);
+      const currentGroup = groups.get(key) ?? [];
+
+      currentGroup.push(transaction);
+      groups.set(key, currentGroup);
+    });
+
+    return Array.from(groups.entries()).map(([date, items]) => ({
+      date,
+      label: formatDate(date),
+      items,
+    }));
+  }, [filteredByView]);
 
   const totalIncome = useMemo(() => {
     return smartFilteredTransactions
@@ -701,11 +985,154 @@ export function TransactionsPage() {
   }, [smartFilteredTransactions]);
 
   const pendingAmount = useMemo(() => {
-    return pendingTransactions.reduce(
-      (total, transaction) => total + Number(transaction.amount),
-      0,
+    return smartFilteredTransactions
+      .filter((transaction) => transaction.status === 'PENDING')
+      .reduce((total, transaction) => total + Number(transaction.amount), 0);
+  }, [smartFilteredTransactions]);
+
+  const paidCount = useMemo(() => {
+    return smartFilteredTransactions.filter(
+      (transaction) => transaction.status === 'PAID',
+    ).length;
+  }, [smartFilteredTransactions]);
+
+  const pendingCount = useMemo(() => {
+    return smartFilteredTransactions.filter(
+      (transaction) => transaction.status === 'PENDING',
+    ).length;
+  }, [smartFilteredTransactions]);
+
+  const canceledCount = useMemo(() => {
+    return smartFilteredTransactions.filter(
+      (transaction) => transaction.status === 'CANCELED',
+    ).length;
+  }, [smartFilteredTransactions]);
+
+  const result = totalIncome - totalExpense;
+
+  const comparisonBaseTransactions = useMemo(() => {
+    return allTransactions.filter((transaction) => {
+      if (filters.type && transaction.type !== filters.type) {
+        return false;
+      }
+
+      if (filters.status && transaction.status !== filters.status) {
+        return false;
+      }
+
+      return matchesSmartSearch(transaction, smartSearch);
+    });
+  }, [allTransactions, filters.status, filters.type, smartSearch]);
+
+  const monthlyComparison = useMemo<MonthlyComparisonData | null>(() => {
+    const availableTransactions = comparisonBaseTransactions.filter(
+      (transaction) => transaction.status !== 'CANCELED',
     );
-  }, [pendingTransactions]);
+
+    if (!availableTransactions.length) {
+      return null;
+    }
+
+    const hasDateFilter = Boolean(filters.startDate || filters.endDate);
+
+    if (hasDateFilter) {
+      const availableDates = availableTransactions
+        .map((transaction) => getDatePart(transaction.transactionDate))
+        .sort();
+
+      const currentStartDate = filters.startDate || availableDates[0];
+      const currentEndDate =
+        filters.endDate || availableDates[availableDates.length - 1];
+
+      const periodLength = diffDays(currentStartDate, currentEndDate) + 1;
+
+      const previousEndDate = formatDatePart(
+        addDays(parseDatePart(currentStartDate), -1),
+      );
+
+      const previousStartDate = formatDatePart(
+        addDays(parseDatePart(previousEndDate), -(periodLength - 1)),
+      );
+
+      const currentItems = availableTransactions.filter((transaction) =>
+        isBetweenDates(
+          transaction.transactionDate,
+          currentStartDate,
+          currentEndDate,
+        ),
+      );
+
+      const previousItems = availableTransactions.filter((transaction) =>
+        isBetweenDates(
+          transaction.transactionDate,
+          previousStartDate,
+          previousEndDate,
+        ),
+      );
+
+      const currentTotals = calculatePeriodTotals(currentItems);
+      const previousTotals = calculatePeriodTotals(previousItems);
+
+      return {
+        currentLabel: `${formatDate(currentStartDate)} até ${formatDate(
+          currentEndDate,
+        )}`,
+        previousLabel: `${formatDate(previousStartDate)} até ${formatDate(
+          previousEndDate,
+        )}`,
+        currentIncome: currentTotals.income,
+        currentExpense: currentTotals.expense,
+        currentPending: currentTotals.pending,
+        currentResult: currentTotals.income - currentTotals.expense,
+        currentCount: currentTotals.count,
+        previousIncome: previousTotals.income,
+        previousExpense: previousTotals.expense,
+        previousPending: previousTotals.pending,
+        previousResult: previousTotals.income - previousTotals.expense,
+        previousCount: previousTotals.count,
+      };
+    }
+
+    const currentMonthKey = getCurrentMonthKey();
+    const hasCurrentMonthData = availableTransactions.some(
+      (transaction) =>
+        getMonthKey(transaction.transactionDate) === currentMonthKey,
+    );
+
+    const referenceMonthKey = hasCurrentMonthData
+      ? currentMonthKey
+      : getMonthKey(availableTransactions[0].transactionDate);
+
+    const previousMonthKey = getPreviousMonthKey(referenceMonthKey);
+
+    const currentItems = availableTransactions.filter(
+      (transaction) =>
+        getMonthKey(transaction.transactionDate) === referenceMonthKey,
+    );
+
+    const previousItems = availableTransactions.filter(
+      (transaction) =>
+        getMonthKey(transaction.transactionDate) === previousMonthKey,
+    );
+
+    const currentTotals = calculatePeriodTotals(currentItems);
+    const previousTotals = calculatePeriodTotals(previousItems);
+
+    return {
+      currentLabel: formatMonthLabel(referenceMonthKey),
+      previousLabel: formatMonthLabel(previousMonthKey),
+      currentIncome: currentTotals.income,
+      currentExpense: currentTotals.expense,
+      currentPending: currentTotals.pending,
+      currentResult: currentTotals.income - currentTotals.expense,
+      currentCount: currentTotals.count,
+      previousIncome: previousTotals.income,
+      previousExpense: previousTotals.expense,
+      previousPending: previousTotals.pending,
+      previousResult: previousTotals.income - previousTotals.expense,
+      previousCount: previousTotals.count,
+    };
+  }, [comparisonBaseTransactions, filters.endDate, filters.startDate]);
 
   const hasActiveFilters =
     Boolean(filters.type) ||
@@ -718,14 +1145,23 @@ export function TransactionsPage() {
     setLoading(true);
 
     try {
-      const [transactionsResponse, accountsResponse, categoriesResponse] =
-        await Promise.all([
-          listTransactions(filters),
-          listAccounts(),
-          listCategories(),
-        ]);
+      const [
+        transactionsResponse,
+        allTransactionsResponse,
+        accountsResponse,
+        categoriesResponse,
+      ] = await Promise.all([
+        listTransactions(filters),
+        listTransactions({
+          type: '',
+          status: '',
+        }),
+        listAccounts(),
+        listCategories(),
+      ]);
 
       setTransactions(sortNewestFirst(transactionsResponse.items));
+      setAllTransactions(sortNewestFirst(allTransactionsResponse.items));
       setAccounts(accountsResponse);
       setCategories(categoriesResponse);
 
@@ -749,10 +1185,10 @@ export function TransactionsPage() {
   useEffect(() => {
     const state = location.state as
       | {
-          openCreateModal?: boolean;
-          transactionType?: TransactionType;
-          openProofUpload?: boolean;
-        }
+        openCreateModal?: boolean;
+        transactionType?: TransactionType;
+        openProofUpload?: boolean;
+      }
       | null;
 
     if (state?.openCreateModal) {
@@ -820,10 +1256,11 @@ export function TransactionsPage() {
     });
 
     setSmartSearch('');
+    setViewMode('ALL');
   }
 
-  function fillFormFromProof(result: ProofUploadResult) {
-    const parsed = result.parsed;
+  function fillFormFromProof(resultData: ProofUploadResult) {
+    const parsed = resultData.parsed;
 
     const description =
       parsed.recipientName ||
@@ -1069,7 +1506,7 @@ export function TransactionsPage() {
         style={{ animation: 'evFadeIn 220ms ease-out both' }}
       >
         <header className="flex items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0">
             <h1 className="text-2xl font-black tracking-tight text-slate-950 md:text-4xl">
               Movimentações
             </h1>
@@ -1096,30 +1533,49 @@ export function TransactionsPage() {
           </div>
         </header>
 
-        <section className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-3">
-          <SummaryTile
-            title="Entradas"
-            value={money(totalIncome)}
-            icon={<ArrowDownLeft size={19} />}
-            tone="income"
-          />
+        <section className="mt-5 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_18px_55px_rgba(15,23,42,0.07)]">
+          <div className="grid grid-cols-[6px_1fr]">
+            <div className={cn(result >= 0 ? 'bg-blue-700' : 'bg-red-600')} />
 
-          <SummaryTile
-            title="Saídas"
-            value={money(totalExpense)}
-            icon={<ArrowUpRight size={19} />}
-            tone="expense"
-          />
+            <div className="p-5 md:p-7">
+              <div className="max-w-3xl">
+                <p className="text-base font-bold text-slate-500 md:text-lg">
+                  Previsão das movimentações
+                </p>
 
-          <SummaryTile
-            title="Pendentes"
-            value={money(pendingAmount)}
-            icon={<Clock3 size={19} />}
-            tone="pending"
-          />
+                <strong
+                  className={cn(
+                    'mt-2 block text-4xl font-black tracking-[-0.045em] md:text-6xl',
+                    result >= 0 ? 'text-slate-950' : 'text-red-600',
+                  )}
+                >
+                  {money(result)}
+                </strong>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-black',
+                      result >= 0
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'bg-red-50 text-red-700',
+                    )}
+                  >
+                    <ShieldCheck size={14} />
+                    {getResultLabel(result)}
+                  </span>
+
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600">
+                    <ReceiptText size={14} />
+                    {smartFilteredTransactions.length} lançamentos
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
-        <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-4 shadow-[0_18px_55px_rgba(15,23,42,0.055)]">
+        <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-4 shadow-[0_18px_50px_rgba(15,23,42,0.055)]">
           <div className="relative">
             <Search
               size={18}
@@ -1129,115 +1585,86 @@ export function TransactionsPage() {
             <input
               value={smartSearch}
               onChange={(event) => setSmartSearch(event.target.value)}
-              placeholder="Buscar por descrição, valor, conta, status..."
+              placeholder="Buscar por mercado, Pix, Nubank, 220, pago..."
               className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-200 focus:bg-white"
             />
           </div>
 
-          <div className="mt-4 flex gap-3 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <ActionButton
-              title="Despesa"
-              description="Nova saída"
-              icon={<Plus size={17} />}
-              tone="expense"
-              onClick={() => openCreate('EXPENSE')}
-            />
-
-            <ActionButton
-              title="Receita"
-              description="Nova entrada"
-              icon={<Plus size={17} />}
-              tone="income"
-              onClick={() => openCreate('INCOME')}
-            />
-
-            <ActionButton
-              title="Transferência"
-              description="Entre contas"
-              icon={<ArrowRightLeft size={17} />}
-              onClick={() => openCreate('TRANSFER')}
-            />
-
-            <ActionButton
-              title="Comprovante"
-              description="Foto ou arquivo"
-              icon={<ReceiptText size={17} />}
-              tone="dark"
-              onClick={() => setShowProofPanel((value) => !value)}
-            />
-          </div>
+          <MonthlyComparisonInsight comparison={monthlyComparison} />
 
           {showFilters ? (
-            <div className="mt-4 grid gap-3 md:grid-cols-5">
-              <select
-                value={filters.type}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    type: event.target.value as TransactionType | '',
-                  }))
-                }
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-              >
-                <option value="">Todos os tipos</option>
-                <option value="INCOME">Receitas</option>
-                <option value="EXPENSE">Despesas</option>
-                <option value="TRANSFER">Transferências</option>
-              </select>
+            <div className="mt-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <div className="grid gap-3 md:grid-cols-5">
+                <select
+                  value={filters.type}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      type: event.target.value as TransactionType | '',
+                    }))
+                  }
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                >
+                  <option value="">Todos os tipos</option>
+                  <option value="INCOME">Receitas</option>
+                  <option value="EXPENSE">Despesas</option>
+                  <option value="TRANSFER">Transferências</option>
+                </select>
 
-              <select
-                value={filters.status}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    status: event.target.value as TransactionStatus | '',
-                  }))
-                }
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-              >
-                <option value="">Todos os status</option>
-                <option value="PENDING">Pendente</option>
-                <option value="PAID">Pago</option>
-                <option value="CANCELED">Cancelado</option>
-              </select>
+                <select
+                  value={filters.status}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      status: event.target.value as TransactionStatus | '',
+                    }))
+                  }
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                >
+                  <option value="">Todos os status</option>
+                  <option value="PENDING">Pendente</option>
+                  <option value="PAID">Pago</option>
+                  <option value="CANCELED">Cancelado</option>
+                </select>
 
-              <input
-                type="date"
-                value={filters.startDate ?? ''}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    startDate: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-              />
+                <input
+                  type="date"
+                  value={filters.startDate ?? ''}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      startDate: event.target.value,
+                    }))
+                  }
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                />
 
-              <input
-                type="date"
-                value={filters.endDate ?? ''}
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    endDate: event.target.value,
-                  }))
-                }
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-              />
+                <input
+                  type="date"
+                  value={filters.endDate ?? ''}
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      endDate: event.target.value,
+                    }))
+                  }
+                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                />
 
-              <button
-                type="button"
-                onClick={loadData}
-                className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
-              >
-                Filtrar
-              </button>
+                <button
+                  type="button"
+                  onClick={loadData}
+                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
+                >
+                  Filtrar
+                </button>
+              </div>
 
               {hasActiveFilters ? (
                 <button
                   type="button"
                   onClick={clearFilters}
-                  className="text-left text-sm font-bold text-slate-500 hover:text-slate-800 md:col-span-5"
+                  className="mt-3 text-sm font-bold text-slate-500 hover:text-slate-800"
                 >
                   Limpar filtros
                 </button>
@@ -1247,317 +1674,370 @@ export function TransactionsPage() {
         </section>
 
         {showProofPanel ? (
-          <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_18px_55px_rgba(15,23,42,0.055)]">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-black text-slate-950">
-                  Lançar por comprovante
-                </h2>
+          <section className="mt-5 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_18px_55px_rgba(15,23,42,0.055)]">
+            <div className="grid grid-cols-[6px_1fr]">
+              <div className="bg-slate-950" />
 
-                <p className="mt-1 text-sm font-medium text-slate-500">
-                  Envie uma foto ou arquivo para leitura automática.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  setShowProofPanel(false);
-                  setProofResult(null);
-                }}
-                className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-3">
-              <label>
-                <span className="mb-2 block text-sm font-semibold text-slate-500">
-                  Tipo
-                </span>
-
-                <select
-                  value={proofForm.type}
-                  onChange={(event) =>
-                    updateProofForm('type', event.target.value as TransactionType)
-                  }
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-                >
-                  <option value="EXPENSE">Despesa</option>
-                  <option value="INCOME">Receita</option>
-                </select>
-              </label>
-
-              <label>
-                <span className="mb-2 block text-sm font-semibold text-slate-500">
-                  Conta
-                </span>
-
-                <select
-                  value={proofForm.accountId}
-                  onChange={(event) =>
-                    updateProofForm('accountId', event.target.value)
-                  }
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-                >
-                  <option value="">Selecione</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                <span className="mb-2 block text-sm font-semibold text-slate-500">
-                  Categoria
-                </span>
-
-                <select
-                  value={proofForm.categoryId}
-                  onChange={(event) =>
-                    updateProofForm('categoryId', event.target.value)
-                  }
-                  className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
-                >
-                  <option value="">Sem categoria</option>
-                  {proofFilteredCategories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <button
-                type="button"
-                disabled={uploadingProof}
-                onClick={() => cameraInputRef.current?.click()}
-                className="flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800 disabled:opacity-60"
-              >
-                {uploadingProof ? (
-                  <Loader2 size={18} className="animate-spin" />
-                ) : (
-                  <Camera size={18} />
-                )}
-                Tirar foto
-              </button>
-
-              <button
-                type="button"
-                disabled={uploadingProof}
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
-              >
-                {uploadingProof ? (
-                  <Loader2 size={18} className="animate-spin" />
-                ) : (
-                  <FileUp size={18} />
-                )}
-                Anexar arquivo
-              </button>
-            </div>
-
-            <input
-              ref={cameraInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              className="hidden"
-              onChange={(event) => handleProofFile(event.target.files?.[0])}
-            />
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,.pdf,application/pdf"
-              className="hidden"
-              onChange={(event) => handleProofFile(event.target.files?.[0])}
-            />
-
-            {proofResult ? (
-              <div className="mt-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-black text-slate-950">
-                        Resultado da leitura
-                      </h3>
-
-                      <ProofStatusBadge status={proofResult.status} />
+              <div className="p-5">
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white">
+                      <ReceiptText size={22} />
                     </div>
 
-                    <p className="mt-1 text-sm font-medium text-slate-500">
-                      {proofResult.message}
-                    </p>
-                  </div>
+                    <div>
+                      <h2 className="text-lg font-black text-slate-950">
+                        Lançar por comprovante
+                      </h2>
 
-                  {proofResult.status === 'NEEDS_REVIEW' ? (
-                    <button
-                      type="button"
-                      onClick={() => fillFormFromProof(proofResult)}
-                      className="rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black text-white"
-                    >
-                      Revisar e lançar
-                    </button>
-                  ) : null}
-                </div>
-
-                <div className="grid gap-2 text-sm md:grid-cols-3">
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">Valor</p>
-                    <p className="mt-1 font-black text-slate-950">
-                      {proofResult.parsed.amount !== null
-                        ? money(proofResult.parsed.amount)
-                        : '-'}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">Data</p>
-                    <p className="mt-1 font-black text-slate-950">
-                      {formatOptionalDate(proofResult.parsed.transactionDate)}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">
-                      Confiança
-                    </p>
-                    <p className="mt-1 font-black text-slate-950">
-                      {proofResult.parsed.confidence}%
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">
-                      Pagador
-                    </p>
-                    <p className="mt-1 break-words font-black text-slate-950">
-                      {proofResult.parsed.payerName ?? '-'}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">
-                      Destinatário
-                    </p>
-                    <p className="mt-1 break-words font-black text-slate-950">
-                      {proofResult.parsed.recipientName ?? '-'}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">Banco</p>
-                    <p className="mt-1 break-words font-black text-slate-950">
-                      {proofResult.parsed.bankName ?? '-'}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3 md:col-span-2">
-                    <p className="text-sm font-semibold text-slate-500">
-                      Chave Pix
-                    </p>
-                    <p className="mt-1 break-words font-black text-slate-950">
-                      {proofResult.parsed.pixKey ?? '-'}
-                    </p>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-semibold text-slate-500">
-                      Identificador
-                    </p>
-                    <p className="mt-1 break-words font-black text-slate-950">
-                      {proofResult.parsed.endToEndId ?? '-'}
-                    </p>
-                  </div>
-                </div>
-
-                {proofResult.parsed.warnings.length > 0 ? (
-                  <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-3">
-                    <div className="mb-2 flex items-center gap-2 text-amber-700">
-                      <AlertTriangle size={16} />
-
-                      <p className="text-xs font-black">
-                        Conferência necessária
+                      <p className="mt-1 text-sm font-medium text-slate-500">
+                        O sistema tenta identificar valor, data, banco, pagador e
+                        destinatário automaticamente.
                       </p>
                     </div>
+                  </div>
 
-                    <ul className="space-y-1 text-xs font-medium text-amber-800">
-                      {proofResult.parsed.warnings.map((warning) => (
-                        <li key={warning}>• {warning}</li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProofPanel(false);
+                      setProofResult(null);
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-600"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label>
+                    <span className="mb-2 block text-sm font-semibold text-slate-500">
+                      Tipo
+                    </span>
+
+                    <select
+                      value={proofForm.type}
+                      onChange={(event) =>
+                        updateProofForm(
+                          'type',
+                          event.target.value as TransactionType,
+                        )
+                      }
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
+                    >
+                      <option value="EXPENSE">Despesa</option>
+                      <option value="INCOME">Receita</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-sm font-semibold text-slate-500">
+                      Conta
+                    </span>
+
+                    <select
+                      value={proofForm.accountId}
+                      onChange={(event) =>
+                        updateProofForm('accountId', event.target.value)
+                      }
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
+                    >
+                      <option value="">Selecione</option>
+                      {accounts.map((account) => (
+                        <option key={account.id} value={account.id}>
+                          {account.name}
+                        </option>
                       ))}
-                    </ul>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span className="mb-2 block text-sm font-semibold text-slate-500">
+                      Categoria
+                    </span>
+
+                    <select
+                      value={proofForm.categoryId}
+                      onChange={(event) =>
+                        updateProofForm('categoryId', event.target.value)
+                      }
+                      className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-200 focus:bg-white"
+                    >
+                      <option value="">Sem categoria</option>
+                      {proofFilteredCategories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    disabled={uploadingProof}
+                    onClick={() => cameraInputRef.current?.click()}
+                    className="flex items-center justify-center gap-2 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800 disabled:opacity-60"
+                  >
+                    {uploadingProof ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Camera size={18} />
+                    )}
+                    Tirar foto
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={uploadingProof}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {uploadingProof ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <FileUp size={18} />
+                    )}
+                    Anexar arquivo
+                  </button>
+                </div>
+
+                <input
+                  ref={cameraInputRef}
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="hidden"
+                  onChange={(event) => handleProofFile(event.target.files?.[0])}
+                />
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,.pdf,application/pdf"
+                  className="hidden"
+                  onChange={(event) => handleProofFile(event.target.files?.[0])}
+                />
+
+                {proofResult ? (
+                  <div className="mt-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="font-black text-slate-950">
+                            Resultado da leitura
+                          </h3>
+
+                          <ProofStatusBadge status={proofResult.status} />
+                        </div>
+
+                        <p className="mt-1 text-sm font-medium text-slate-500">
+                          {proofResult.message}
+                        </p>
+                      </div>
+
+                      {proofResult.status === 'NEEDS_REVIEW' ? (
+                        <button
+                          type="button"
+                          onClick={() => fillFormFromProof(proofResult)}
+                          className="rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black text-white"
+                        >
+                          Revisar e lançar
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div className="grid gap-2 text-sm md:grid-cols-3">
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Valor
+                        </p>
+                        <p className="mt-1 font-black text-slate-950">
+                          {proofResult.parsed.amount !== null
+                            ? money(proofResult.parsed.amount)
+                            : '-'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Data
+                        </p>
+                        <p className="mt-1 font-black text-slate-950">
+                          {formatOptionalDate(proofResult.parsed.transactionDate)}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Confiança
+                        </p>
+                        <p className="mt-1 font-black text-slate-950">
+                          {proofResult.parsed.confidence}%
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Pagador
+                        </p>
+                        <p className="mt-1 break-words font-black text-slate-950">
+                          {proofResult.parsed.payerName ?? '-'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Destinatário
+                        </p>
+                        <p className="mt-1 break-words font-black text-slate-950">
+                          {proofResult.parsed.recipientName ?? '-'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Banco
+                        </p>
+                        <p className="mt-1 break-words font-black text-slate-950">
+                          {proofResult.parsed.bankName ?? '-'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3 md:col-span-2">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Chave Pix
+                        </p>
+                        <p className="mt-1 break-words font-black text-slate-950">
+                          {proofResult.parsed.pixKey ?? '-'}
+                        </p>
+                      </div>
+
+                      <div className="rounded-2xl bg-white p-3">
+                        <p className="text-sm font-semibold text-slate-500">
+                          Identificador
+                        </p>
+                        <p className="mt-1 break-words font-black text-slate-950">
+                          {proofResult.parsed.endToEndId ?? '-'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {proofResult.parsed.warnings.length > 0 ? (
+                      <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-3">
+                        <div className="mb-2 flex items-center gap-2 text-amber-700">
+                          <AlertTriangle size={16} />
+
+                          <p className="text-xs font-black">
+                            Conferência necessária
+                          </p>
+                        </div>
+
+                        <ul className="space-y-1 text-xs font-medium text-amber-800">
+                          {proofResult.parsed.warnings.map((warning) => (
+                            <li key={warning}>• {warning}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
-            ) : null}
+            </div>
           </section>
         ) : null}
 
-        <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-2 shadow-[0_18px_55px_rgba(15,23,42,0.055)]">
-          <div className="grid grid-cols-3 gap-1 rounded-[1.6rem] bg-slate-100 p-1">
-            {[
-              { value: 'ALL', label: 'Todos' },
-              { value: 'PENDING', label: 'Pendentes' },
-              { value: 'HISTORY', label: 'Histórico' },
-            ].map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                onClick={() => setViewMode(item.value as ViewMode)}
-                className={cn(
-                  'rounded-[1.25rem] px-3 py-2.5 text-sm font-black transition',
-                  viewMode === item.value
-                    ? 'bg-white text-slate-950 shadow-sm'
-                    : 'text-slate-500',
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
+        <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.055)]">
+          <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 className="text-lg font-black tracking-tight text-slate-950">
+                Extrato
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-4 gap-1 rounded-[1.5rem] bg-slate-100 p-1">
+              {[
+                {
+                  value: 'ALL',
+                  label: 'Todos',
+                  count: smartFilteredTransactions.length,
+                },
+                { value: 'PENDING', label: 'Pend.', count: pendingCount },
+                { value: 'PAID', label: 'Pagos', count: paidCount },
+                { value: 'CANCELED', label: 'Canc.', count: canceledCount },
+              ].map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setViewMode(item.value as ViewMode)}
+                  className={cn(
+                    'rounded-[1.1rem] px-3 py-2 text-xs font-black transition',
+                    viewMode === item.value
+                      ? 'bg-white text-slate-950 shadow-sm'
+                      : 'text-slate-500',
+                  )}
+                >
+                  {item.label}
+                  <span className="ml-1 opacity-70">{item.count}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {loading ? (
-            <div className="mt-4 space-y-3 p-3">
+            <div className="space-y-3">
               {Array.from({ length: 5 }).map((_, index) => (
                 <div
                   key={index}
-                  className="h-24 animate-pulse rounded-[1.5rem] bg-slate-100"
+                  className="h-28 animate-pulse rounded-[1.5rem] bg-slate-100"
                 />
               ))}
             </div>
-          ) : (
-            <div className="mt-4 space-y-3 p-3">
-              {visibleTransactions.length ? (
-                visibleTransactions.map((transaction) => (
-                  <TransactionItem
-                    key={transaction.id}
-                    transaction={transaction}
-                    highlighted={transaction.status === 'PENDING'}
-                    menuOpen={openedMenuId === transaction.id}
-                    onToggleMenu={() =>
-                      setOpenedMenuId(
-                        openedMenuId === transaction.id ? null : transaction.id,
-                      )
-                    }
-                    onPay={() => setConfirmAction({ type: 'pay', transaction })}
-                    onCancel={() =>
-                      setConfirmAction({ type: 'cancel', transaction })
-                    }
-                    onDelete={() =>
-                      setConfirmAction({ type: 'delete', transaction })
-                    }
-                  />
-                ))
-              ) : (
-                <EmptyState />
-              )}
+          ) : groupedTransactions.length ? (
+            <div className="space-y-6">
+              {groupedTransactions.map((group) => (
+                <div key={group.date}>
+                  <div className="mb-3 flex items-center gap-3">
+                    <div className="h-px flex-1 bg-slate-200" />
+
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">
+                      {group.label}
+                    </span>
+
+                    <div className="h-px flex-1 bg-slate-200" />
+                  </div>
+
+                  <div className="space-y-3">
+                    {group.items.map((transaction) => (
+                      <TransactionCard
+                        key={transaction.id}
+                        transaction={transaction}
+                        menuOpen={openedMenuId === transaction.id}
+                        onToggleMenu={() =>
+                          setOpenedMenuId(
+                            openedMenuId === transaction.id
+                              ? null
+                              : transaction.id,
+                          )
+                        }
+                        onPay={() =>
+                          setConfirmAction({ type: 'pay', transaction })
+                        }
+                        onCancel={() =>
+                          setConfirmAction({ type: 'cancel', transaction })
+                        }
+                        onDelete={() =>
+                          setConfirmAction({ type: 'delete', transaction })
+                        }
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
+          ) : (
+            <EmptyTransactions />
           )}
         </section>
       </main>

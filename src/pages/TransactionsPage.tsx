@@ -7,8 +7,6 @@ import {
   ArrowUpRight,
   Camera,
   CheckCircle2,
-  ChevronDown,
-  ChevronRight,
   Clock3,
   FileUp,
   Filter,

@@ -14,8 +14,8 @@ import {
   MoreHorizontal,
   ReceiptText,
   RefreshCcw,
-  Search,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   X,
   XCircle,
@@ -46,17 +46,17 @@ import type {
 
 type ConfirmAction =
   | {
-    type: 'delete';
-    transaction: FinancialTransaction;
-  }
+      type: 'delete';
+      transaction: FinancialTransaction;
+    }
   | {
-    type: 'pay';
-    transaction: FinancialTransaction;
-  }
+      type: 'pay';
+      transaction: FinancialTransaction;
+    }
   | {
-    type: 'cancel';
-    transaction: FinancialTransaction;
-  }
+      type: 'cancel';
+      transaction: FinancialTransaction;
+    }
   | null;
 
 type ProofUploadStatus = 'CREATED' | 'NEEDS_REVIEW' | 'DUPLICATE';
@@ -90,8 +90,6 @@ type SortableFinancialTransaction = FinancialTransaction & {
   updatedAt?: string | null;
 };
 
-type ViewMode = 'ALL' | 'PENDING' | 'PAID' | 'CANCELED';
-
 type MonthlyComparisonData = {
   currentLabel: string;
   previousLabel: string;
@@ -105,6 +103,13 @@ type MonthlyComparisonData = {
   previousPending: number;
   previousResult: number;
   previousCount: number;
+};
+
+type DetailedFilters = {
+  accountId: string;
+  categoryId: string;
+  minAmount: string;
+  maxAmount: string;
 };
 
 const transactionTypeLabels: Record<TransactionType, string> = {
@@ -134,18 +139,10 @@ function money(value: number | string) {
 
   return Number.isFinite(parsed)
     ? parsed.toLocaleString('pt-BR', {
-      style: 'currency',
-      currency: 'BRL',
-    })
+        style: 'currency',
+        currency: 'BRL',
+      })
     : 'R$ 0,00';
-}
-
-function normalizeText(value?: string | number | null) {
-  return String(value ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
 }
 
 function toInputDate(date = new Date()) {
@@ -374,79 +371,44 @@ function getComparisonInsight({
   return 'O período está equilibrado em relação ao anterior.';
 }
 
-function matchesSmartSearch(
-  transaction: FinancialTransaction,
-  searchValue: string,
+function applyDetailedFilters(
+  transactions: FinancialTransaction[],
+  detailedFilters: DetailedFilters,
 ) {
-  const search = normalizeText(searchValue);
+  return transactions.filter((transaction) => {
+    if (
+      detailedFilters.accountId &&
+      transaction.account?.id !== detailedFilters.accountId &&
+      transaction.transferAccount?.id !== detailedFilters.accountId
+    ) {
+      return false;
+    }
 
-  if (!search) {
+    if (
+      detailedFilters.categoryId &&
+      transaction.category?.id !== detailedFilters.categoryId
+    ) {
+      return false;
+    }
+
+    const amount = Number(transaction.amount);
+    const minAmount = detailedFilters.minAmount
+      ? Number(detailedFilters.minAmount)
+      : null;
+    const maxAmount = detailedFilters.maxAmount
+      ? Number(detailedFilters.maxAmount)
+      : null;
+
+    if (minAmount !== null && Number.isFinite(minAmount) && amount < minAmount) {
+      return false;
+    }
+
+    if (maxAmount !== null && Number.isFinite(maxAmount) && amount > maxAmount) {
+      return false;
+    }
+
     return true;
-  }
-
-  const amount = Number(transaction.amount);
-  const amountFormatted = money(amount);
-  const dateFormatted = formatDate(transaction.transactionDate);
-
-  const searchableText = normalizeText(
-    [
-      transaction.description,
-      transaction.type,
-      transactionTypeLabels[transaction.type],
-      transaction.status,
-      statusLabels[transaction.status],
-      transaction.account?.name,
-      transaction.category?.name,
-      transaction.transferAccount?.name,
-      amount,
-      amountFormatted,
-      dateFormatted,
-      transaction.transactionDate,
-    ].join(' '),
-  );
-
-  if (searchableText.includes(search)) {
-    return true;
-  }
-
-  if (search.includes('pago') && transaction.status === 'PAID') {
-    return true;
-  }
-
-  if (search.includes('pendente') && transaction.status === 'PENDING') {
-    return true;
-  }
-
-  if (search.includes('cancelado') && transaction.status === 'CANCELED') {
-    return true;
-  }
-
-  if (
-    (search.includes('gasto') ||
-      search.includes('despesa') ||
-      search.includes('saida')) &&
-    transaction.type === 'EXPENSE'
-  ) {
-    return true;
-  }
-
-  if (
-    (search.includes('receita') ||
-      search.includes('entrada') ||
-      search.includes('ganho')) &&
-    transaction.type === 'INCOME'
-  ) {
-    return true;
-  }
-
-  if (
-    (search.includes('transferencia') || search.includes('transferir')) &&
-    transaction.type === 'TRANSFER'
-  ) {
-    return true;
-  }
-
-  return false;
+  });
 }
 
 function getTransactionTone(type: TransactionType) {
@@ -866,12 +828,17 @@ export function TransactionsPage() {
   const [openedMenuId, setOpenedMenuId] = useState<string | null>(null);
 
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
-  const [smartSearch, setSmartSearch] = useState('');
-  const [viewMode, setViewMode] = useState<ViewMode>('ALL');
 
   const [filters, setFilters] = useState<TransactionFilters>({
     type: '',
     status: '',
+  });
+
+  const [detailedFilters, setDetailedFilters] = useState<DetailedFilters>({
+    accountId: '',
+    categoryId: '',
+    minAmount: '',
+    maxAmount: '',
   });
 
   const [proofForm, setProofForm] = useState<ProofFormState>({
@@ -916,42 +883,26 @@ export function TransactionsPage() {
     });
   }, [categories, proofForm.type]);
 
+  const detailedFilterCategories = useMemo(() => {
+    if (!filters.type || filters.type === 'TRANSFER') {
+      return categories;
+    }
+
+    return categories.filter((category) => category.type === filters.type);
+  }, [categories, filters.type]);
+
   const sortedTransactions = useMemo(() => {
     return sortNewestFirst(transactions);
   }, [transactions]);
 
-  const smartFilteredTransactions = useMemo(() => {
-    return sortedTransactions.filter((transaction) =>
-      matchesSmartSearch(transaction, smartSearch),
-    );
-  }, [smartSearch, sortedTransactions]);
-
-  const filteredByView = useMemo(() => {
-    if (viewMode === 'PENDING') {
-      return smartFilteredTransactions.filter(
-        (transaction) => transaction.status === 'PENDING',
-      );
-    }
-
-    if (viewMode === 'PAID') {
-      return smartFilteredTransactions.filter(
-        (transaction) => transaction.status === 'PAID',
-      );
-    }
-
-    if (viewMode === 'CANCELED') {
-      return smartFilteredTransactions.filter(
-        (transaction) => transaction.status === 'CANCELED',
-      );
-    }
-
-    return smartFilteredTransactions;
-  }, [smartFilteredTransactions, viewMode]);
+  const filteredTransactions = useMemo(() => {
+    return applyDetailedFilters(sortedTransactions, detailedFilters);
+  }, [detailedFilters, sortedTransactions]);
 
   const groupedTransactions = useMemo(() => {
     const groups = new Map<string, FinancialTransaction[]>();
 
-    filteredByView.forEach((transaction) => {
+    filteredTransactions.forEach((transaction) => {
       const key = getDateKey(transaction.transactionDate);
       const currentGroup = groups.get(key) ?? [];
 
@@ -964,54 +915,30 @@ export function TransactionsPage() {
       label: formatDate(date),
       items,
     }));
-  }, [filteredByView]);
+  }, [filteredTransactions]);
 
   const totalIncome = useMemo(() => {
-    return smartFilteredTransactions
+    return filteredTransactions
       .filter(
         (transaction) =>
           transaction.type === 'INCOME' && transaction.status !== 'CANCELED',
       )
       .reduce((total, transaction) => total + Number(transaction.amount), 0);
-  }, [smartFilteredTransactions]);
+  }, [filteredTransactions]);
 
   const totalExpense = useMemo(() => {
-    return smartFilteredTransactions
+    return filteredTransactions
       .filter(
         (transaction) =>
           transaction.type === 'EXPENSE' && transaction.status !== 'CANCELED',
       )
       .reduce((total, transaction) => total + Number(transaction.amount), 0);
-  }, [smartFilteredTransactions]);
-
-  const pendingAmount = useMemo(() => {
-    return smartFilteredTransactions
-      .filter((transaction) => transaction.status === 'PENDING')
-      .reduce((total, transaction) => total + Number(transaction.amount), 0);
-  }, [smartFilteredTransactions]);
-
-  const paidCount = useMemo(() => {
-    return smartFilteredTransactions.filter(
-      (transaction) => transaction.status === 'PAID',
-    ).length;
-  }, [smartFilteredTransactions]);
-
-  const pendingCount = useMemo(() => {
-    return smartFilteredTransactions.filter(
-      (transaction) => transaction.status === 'PENDING',
-    ).length;
-  }, [smartFilteredTransactions]);
-
-  const canceledCount = useMemo(() => {
-    return smartFilteredTransactions.filter(
-      (transaction) => transaction.status === 'CANCELED',
-    ).length;
-  }, [smartFilteredTransactions]);
+  }, [filteredTransactions]);
 
   const result = totalIncome - totalExpense;
 
   const comparisonBaseTransactions = useMemo(() => {
-    return allTransactions.filter((transaction) => {
+    const baseTransactions = allTransactions.filter((transaction) => {
       if (filters.type && transaction.type !== filters.type) {
         return false;
       }
@@ -1020,9 +947,11 @@ export function TransactionsPage() {
         return false;
       }
 
-      return matchesSmartSearch(transaction, smartSearch);
+      return true;
     });
-  }, [allTransactions, filters.status, filters.type, smartSearch]);
+
+    return applyDetailedFilters(baseTransactions, detailedFilters);
+  }, [allTransactions, detailedFilters, filters.status, filters.type]);
 
   const monthlyComparison = useMemo<MonthlyComparisonData | null>(() => {
     const availableTransactions = comparisonBaseTransactions.filter(
@@ -1139,7 +1068,10 @@ export function TransactionsPage() {
     Boolean(filters.status) ||
     Boolean(filters.startDate) ||
     Boolean(filters.endDate) ||
-    Boolean(smartSearch.trim());
+    Boolean(detailedFilters.accountId) ||
+    Boolean(detailedFilters.categoryId) ||
+    Boolean(detailedFilters.minAmount) ||
+    Boolean(detailedFilters.maxAmount);
 
   async function loadData() {
     setLoading(true);
@@ -1185,10 +1117,10 @@ export function TransactionsPage() {
   useEffect(() => {
     const state = location.state as
       | {
-        openCreateModal?: boolean;
-        transactionType?: TransactionType;
-        openProofUpload?: boolean;
-      }
+          openCreateModal?: boolean;
+          transactionType?: TransactionType;
+          openProofUpload?: boolean;
+        }
       | null;
 
     if (state?.openCreateModal) {
@@ -1233,6 +1165,17 @@ export function TransactionsPage() {
     }));
   }
 
+  function updateDetailedFilter<K extends keyof DetailedFilters>(
+    key: K,
+    value: DetailedFilters[K],
+  ) {
+    setDetailedFilters((current) => ({
+      ...current,
+      [key]: value,
+      categoryId: key === 'categoryId' ? value : current.categoryId,
+    }));
+  }
+
   function resetForm(type: TransactionType = 'EXPENSE') {
     setForm({
       description: '',
@@ -1255,8 +1198,12 @@ export function TransactionsPage() {
       endDate: '',
     });
 
-    setSmartSearch('');
-    setViewMode('ALL');
+    setDetailedFilters({
+      accountId: '',
+      categoryId: '',
+      minAmount: '',
+      maxAmount: '',
+    });
   }
 
   function fillFormFromProof(resultData: ProofUploadResult) {
@@ -1478,11 +1425,6 @@ export function TransactionsPage() {
     return 'Excluir';
   }
 
-  function openCreate(type: TransactionType) {
-    resetForm(type);
-    setShowForm(true);
-  }
-
   return (
     <div className="min-h-screen bg-white pb-[calc(6rem+env(safe-area-inset-bottom))] text-slate-950 md:pb-10">
       <style>
@@ -1517,9 +1459,9 @@ export function TransactionsPage() {
               type="button"
               onClick={() => setShowFilters((value) => !value)}
               className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-950 shadow-[0_10px_28px_rgba(15,23,42,0.06)] transition duration-200 hover:border-slate-300"
-              aria-label="Filtros"
+              aria-label="Filtros detalhados"
             >
-              <Filter size={18} />
+              <SlidersHorizontal size={18} />
             </button>
 
             <button
@@ -1567,7 +1509,7 @@ export function TransactionsPage() {
 
                   <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600">
                     <ReceiptText size={14} />
-                    {smartFilteredTransactions.length} lançamentos
+                    {filteredTransactions.length} lançamentos
                   </span>
                 </div>
               </div>
@@ -1576,101 +1518,225 @@ export function TransactionsPage() {
         </section>
 
         <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-4 shadow-[0_18px_50px_rgba(15,23,42,0.055)]">
-          <div className="relative">
-            <Search
-              size={18}
-              className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
-            />
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
+                <Filter size={19} />
+              </div>
 
-            <input
-              value={smartSearch}
-              onChange={(event) => setSmartSearch(event.target.value)}
-              placeholder="Buscar por mercado, Pix, Nubank, 220, pago..."
-              className="w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-11 pr-4 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-200 focus:bg-white"
-            />
+              <div>
+                <h2 className="text-lg font-black tracking-tight text-slate-950">
+                  Filtros detalhados
+                </h2>
+
+                <p className="text-sm font-medium text-slate-500">
+                  Refine por período, conta, categoria, tipo, status e valor.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowFilters((value) => !value)}
+              className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600"
+            >
+              {showFilters ? 'Ocultar' : 'Abrir'}
+            </button>
           </div>
-
-          <MonthlyComparisonInsight comparison={monthlyComparison} />
 
           {showFilters ? (
             <div className="mt-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <div className="grid gap-3 md:grid-cols-5">
-                <select
-                  value={filters.type}
-                  onChange={(event) =>
-                    setFilters((current) => ({
-                      ...current,
-                      type: event.target.value as TransactionType | '',
-                    }))
-                  }
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                >
-                  <option value="">Todos os tipos</option>
-                  <option value="INCOME">Receitas</option>
-                  <option value="EXPENSE">Despesas</option>
-                  <option value="TRANSFER">Transferências</option>
-                </select>
+              <div className="grid gap-3 md:grid-cols-4">
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Tipo
+                  </span>
 
-                <select
-                  value={filters.status}
-                  onChange={(event) =>
-                    setFilters((current) => ({
-                      ...current,
-                      status: event.target.value as TransactionStatus | '',
-                    }))
-                  }
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                >
-                  <option value="">Todos os status</option>
-                  <option value="PENDING">Pendente</option>
-                  <option value="PAID">Pago</option>
-                  <option value="CANCELED">Cancelado</option>
-                </select>
+                  <select
+                    value={filters.type}
+                    onChange={(event) => {
+                      const type = event.target.value as TransactionType | '';
 
-                <input
-                  type="date"
-                  value={filters.startDate ?? ''}
-                  onChange={(event) =>
-                    setFilters((current) => ({
-                      ...current,
-                      startDate: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                />
+                      setFilters((current) => ({
+                        ...current,
+                        type,
+                      }));
 
-                <input
-                  type="date"
-                  value={filters.endDate ?? ''}
-                  onChange={(event) =>
-                    setFilters((current) => ({
-                      ...current,
-                      endDate: event.target.value,
-                    }))
-                  }
-                  className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                />
+                      setDetailedFilters((current) => ({
+                        ...current,
+                        categoryId: '',
+                      }));
+                    }}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  >
+                    <option value="">Todos os tipos</option>
+                    <option value="INCOME">Receitas</option>
+                    <option value="EXPENSE">Despesas</option>
+                    <option value="TRANSFER">Transferências</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Status
+                  </span>
+
+                  <select
+                    value={filters.status}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        status: event.target.value as TransactionStatus | '',
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  >
+                    <option value="">Todos os status</option>
+                    <option value="PENDING">Pendente</option>
+                    <option value="PAID">Pago</option>
+                    <option value="CANCELED">Cancelado</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Data inicial
+                  </span>
+
+                  <input
+                    type="date"
+                    value={filters.startDate ?? ''}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        startDate: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Data final
+                  </span>
+
+                  <input
+                    type="date"
+                    value={filters.endDate ?? ''}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        endDate: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Conta
+                  </span>
+
+                  <select
+                    value={detailedFilters.accountId}
+                    onChange={(event) =>
+                      updateDetailedFilter('accountId', event.target.value)
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  >
+                    <option value="">Todas as contas</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Categoria
+                  </span>
+
+                  <select
+                    value={detailedFilters.categoryId}
+                    onChange={(event) =>
+                      updateDetailedFilter('categoryId', event.target.value)
+                    }
+                    disabled={filters.type === 'TRANSFER'}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    <option value="">Todas as categorias</option>
+                    {detailedFilterCategories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Valor mínimo
+                  </span>
+
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={detailedFilters.minAmount}
+                    onChange={(event) =>
+                      updateDetailedFilter('minAmount', event.target.value)
+                    }
+                    placeholder="0,00"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Valor máximo
+                  </span>
+
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={detailedFilters.maxAmount}
+                    onChange={(event) =>
+                      updateDetailedFilter('maxAmount', event.target.value)
+                    }
+                    placeholder="0,00"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                {hasActiveFilters ? (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50"
+                  >
+                    Limpar filtros
+                  </button>
+                ) : null}
 
                 <button
                   type="button"
                   onClick={loadData}
                   className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
                 >
-                  Filtrar
+                  Aplicar filtros
                 </button>
               </div>
-
-              {hasActiveFilters ? (
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  className="mt-3 text-sm font-bold text-slate-500 hover:text-slate-800"
-                >
-                  Limpar filtros
-                </button>
-              ) : null}
             </div>
           ) : null}
+
+          <MonthlyComparisonInsight comparison={monthlyComparison} />
         </section>
 
         {showProofPanel ? (
@@ -1949,40 +2015,16 @@ export function TransactionsPage() {
         ) : null}
 
         <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.055)]">
-          <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="mb-5 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-black tracking-tight text-slate-950">
                 Extrato
               </h2>
             </div>
 
-            <div className="grid grid-cols-4 gap-1 rounded-[1.5rem] bg-slate-100 p-1">
-              {[
-                {
-                  value: 'ALL',
-                  label: 'Todos',
-                  count: smartFilteredTransactions.length,
-                },
-                { value: 'PENDING', label: 'Pend.', count: pendingCount },
-                { value: 'PAID', label: 'Pagos', count: paidCount },
-                { value: 'CANCELED', label: 'Canc.', count: canceledCount },
-              ].map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  onClick={() => setViewMode(item.value as ViewMode)}
-                  className={cn(
-                    'rounded-[1.1rem] px-3 py-2 text-xs font-black transition',
-                    viewMode === item.value
-                      ? 'bg-white text-slate-950 shadow-sm'
-                      : 'text-slate-500',
-                  )}
-                >
-                  {item.label}
-                  <span className="ml-1 opacity-70">{item.count}</span>
-                </button>
-              ))}
-            </div>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">
+              {filteredTransactions.length} lançamentos
+            </span>
           </div>
 
           {loading ? (

@@ -15,7 +15,6 @@ import {
   ReceiptText,
   RefreshCcw,
   ShieldCheck,
-  SlidersHorizontal,
   Trash2,
   X,
   XCircle,
@@ -478,7 +477,7 @@ function MonthlyComparisonInsight({
 }) {
   if (!comparison) {
     return (
-      <section className="mt-4 rounded-[1.6rem] border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
+      <section className="mt-5 rounded-[1.8rem] border border-dashed border-slate-200 bg-slate-50 p-5 text-center">
         <p className="text-sm font-bold text-slate-500">
           Ainda não há dados suficientes para comparar períodos.
         </p>
@@ -488,7 +487,7 @@ function MonthlyComparisonInsight({
 
   if (comparison.previousCount === 0) {
     return (
-      <section className="mt-4 overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-[0_14px_38px_rgba(15,23,42,0.055)]">
+      <section className="mt-5 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_14px_38px_rgba(15,23,42,0.055)]">
         <div className="grid grid-cols-[5px_1fr]">
           <div className="bg-blue-700" />
 
@@ -529,7 +528,7 @@ function MonthlyComparisonInsight({
   const resultIsBetter = resultDifference >= 0;
 
   return (
-    <section className="mt-4 overflow-hidden rounded-[1.8rem] border border-slate-200 bg-white shadow-[0_14px_38px_rgba(15,23,42,0.055)]">
+    <section className="mt-5 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_14px_38px_rgba(15,23,42,0.055)]">
       <div className="grid grid-cols-[5px_1fr]">
         <div className={resultIsBetter ? 'bg-blue-700' : 'bg-red-600'} />
 
@@ -1172,7 +1171,6 @@ export function TransactionsPage() {
     setDetailedFilters((current) => ({
       ...current,
       [key]: value,
-      categoryId: key === 'categoryId' ? value : current.categoryId,
     }));
   }
 
@@ -1457,15 +1455,6 @@ export function TransactionsPage() {
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
-              onClick={() => setShowFilters((value) => !value)}
-              className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-950 shadow-[0_10px_28px_rgba(15,23,42,0.06)] transition duration-200 hover:border-slate-300"
-              aria-label="Filtros detalhados"
-            >
-              <SlidersHorizontal size={18} />
-            </button>
-
-            <button
-              type="button"
               onClick={loadData}
               className="flex h-11 w-11 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-950 shadow-[0_10px_28px_rgba(15,23,42,0.06)] transition duration-200 hover:border-slate-300"
               aria-label="Atualizar"
@@ -1517,227 +1506,7 @@ export function TransactionsPage() {
           </div>
         </section>
 
-        <section className="mt-5 rounded-[2rem] border border-slate-200 bg-white p-4 shadow-[0_18px_50px_rgba(15,23,42,0.055)]">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-700">
-                <Filter size={19} />
-              </div>
-
-              <div>
-                <h2 className="text-lg font-black tracking-tight text-slate-950">
-                  Filtros detalhados
-                </h2>
-
-                <p className="text-sm font-medium text-slate-500">
-                  Refine por período, conta, categoria, tipo, status e valor.
-                </p>
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowFilters((value) => !value)}
-              className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600"
-            >
-              {showFilters ? 'Ocultar' : 'Abrir'}
-            </button>
-          </div>
-
-          {showFilters ? (
-            <div className="mt-4 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
-              <div className="grid gap-3 md:grid-cols-4">
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Tipo
-                  </span>
-
-                  <select
-                    value={filters.type}
-                    onChange={(event) => {
-                      const type = event.target.value as TransactionType | '';
-
-                      setFilters((current) => ({
-                        ...current,
-                        type,
-                      }));
-
-                      setDetailedFilters((current) => ({
-                        ...current,
-                        categoryId: '',
-                      }));
-                    }}
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  >
-                    <option value="">Todos os tipos</option>
-                    <option value="INCOME">Receitas</option>
-                    <option value="EXPENSE">Despesas</option>
-                    <option value="TRANSFER">Transferências</option>
-                  </select>
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Status
-                  </span>
-
-                  <select
-                    value={filters.status}
-                    onChange={(event) =>
-                      setFilters((current) => ({
-                        ...current,
-                        status: event.target.value as TransactionStatus | '',
-                      }))
-                    }
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  >
-                    <option value="">Todos os status</option>
-                    <option value="PENDING">Pendente</option>
-                    <option value="PAID">Pago</option>
-                    <option value="CANCELED">Cancelado</option>
-                  </select>
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Data inicial
-                  </span>
-
-                  <input
-                    type="date"
-                    value={filters.startDate ?? ''}
-                    onChange={(event) =>
-                      setFilters((current) => ({
-                        ...current,
-                        startDate: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Data final
-                  </span>
-
-                  <input
-                    type="date"
-                    value={filters.endDate ?? ''}
-                    onChange={(event) =>
-                      setFilters((current) => ({
-                        ...current,
-                        endDate: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Conta
-                  </span>
-
-                  <select
-                    value={detailedFilters.accountId}
-                    onChange={(event) =>
-                      updateDetailedFilter('accountId', event.target.value)
-                    }
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  >
-                    <option value="">Todas as contas</option>
-                    {accounts.map((account) => (
-                      <option key={account.id} value={account.id}>
-                        {account.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Categoria
-                  </span>
-
-                  <select
-                    value={detailedFilters.categoryId}
-                    onChange={(event) =>
-                      updateDetailedFilter('categoryId', event.target.value)
-                    }
-                    disabled={filters.type === 'TRANSFER'}
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-200 disabled:bg-slate-100 disabled:text-slate-400"
-                  >
-                    <option value="">Todas as categorias</option>
-                    {detailedFilterCategories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Valor mínimo
-                  </span>
-
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={detailedFilters.minAmount}
-                    onChange={(event) =>
-                      updateDetailedFilter('minAmount', event.target.value)
-                    }
-                    placeholder="0,00"
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  />
-                </label>
-
-                <label>
-                  <span className="mb-2 block text-sm font-semibold text-slate-500">
-                    Valor máximo
-                  </span>
-
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={detailedFilters.maxAmount}
-                    onChange={(event) =>
-                      updateDetailedFilter('maxAmount', event.target.value)
-                    }
-                    placeholder="0,00"
-                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
-                  />
-                </label>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
-                {hasActiveFilters ? (
-                  <button
-                    type="button"
-                    onClick={clearFilters}
-                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50"
-                  >
-                    Limpar filtros
-                  </button>
-                ) : null}
-
-                <button
-                  type="button"
-                  onClick={loadData}
-                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
-                >
-                  Aplicar filtros
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          <MonthlyComparisonInsight comparison={monthlyComparison} />
-        </section>
+        <MonthlyComparisonInsight comparison={monthlyComparison} />
 
         {showProofPanel ? (
           <section className="mt-5 overflow-hidden rounded-[2rem] border border-slate-200 bg-white shadow-[0_18px_55px_rgba(15,23,42,0.055)]">
@@ -2020,12 +1789,218 @@ export function TransactionsPage() {
               <h2 className="text-lg font-black tracking-tight text-slate-950">
                 Extrato
               </h2>
+
+              <p className="mt-1 text-sm font-medium text-slate-500">
+                {filteredTransactions.length} lançamentos encontrados
+              </p>
             </div>
 
-            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">
-              {filteredTransactions.length} lançamentos
-            </span>
+            <button
+              type="button"
+              onClick={() => setShowFilters((value) => !value)}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-2xl px-4 py-3 text-sm font-black transition',
+                showFilters
+                  ? 'bg-slate-950 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200',
+              )}
+            >
+              <Filter size={17} />
+              Filtrar
+            </button>
           </div>
+
+          {showFilters ? (
+            <div className="mb-5 rounded-[1.5rem] border border-slate-200 bg-slate-50 p-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Tipo
+                  </span>
+
+                  <select
+                    value={filters.type}
+                    onChange={(event) => {
+                      const type = event.target.value as TransactionType | '';
+
+                      setFilters((current) => ({
+                        ...current,
+                        type,
+                      }));
+
+                      setDetailedFilters((current) => ({
+                        ...current,
+                        categoryId: '',
+                      }));
+                    }}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  >
+                    <option value="">Todos os tipos</option>
+                    <option value="INCOME">Receitas</option>
+                    <option value="EXPENSE">Despesas</option>
+                    <option value="TRANSFER">Transferências</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Status
+                  </span>
+
+                  <select
+                    value={filters.status}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        status: event.target.value as TransactionStatus | '',
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  >
+                    <option value="">Todos os status</option>
+                    <option value="PENDING">Pendente</option>
+                    <option value="PAID">Pago</option>
+                    <option value="CANCELED">Cancelado</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Data inicial
+                  </span>
+
+                  <input
+                    type="date"
+                    value={filters.startDate ?? ''}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        startDate: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Data final
+                  </span>
+
+                  <input
+                    type="date"
+                    value={filters.endDate ?? ''}
+                    onChange={(event) =>
+                      setFilters((current) => ({
+                        ...current,
+                        endDate: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Conta
+                  </span>
+
+                  <select
+                    value={detailedFilters.accountId}
+                    onChange={(event) =>
+                      updateDetailedFilter('accountId', event.target.value)
+                    }
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  >
+                    <option value="">Todas as contas</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Categoria
+                  </span>
+
+                  <select
+                    value={detailedFilters.categoryId}
+                    onChange={(event) =>
+                      updateDetailedFilter('categoryId', event.target.value)
+                    }
+                    disabled={filters.type === 'TRANSFER'}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-200 disabled:bg-slate-100 disabled:text-slate-400"
+                  >
+                    <option value="">Todas as categorias</option>
+                    {detailedFilterCategories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Valor mínimo
+                  </span>
+
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={detailedFilters.minAmount}
+                    onChange={(event) =>
+                      updateDetailedFilter('minAmount', event.target.value)
+                    }
+                    placeholder="0,00"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+
+                <label>
+                  <span className="mb-2 block text-sm font-semibold text-slate-500">
+                    Valor máximo
+                  </span>
+
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={detailedFilters.maxAmount}
+                    onChange={(event) =>
+                      updateDetailedFilter('maxAmount', event.target.value)
+                    }
+                    placeholder="0,00"
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-blue-200"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                {hasActiveFilters ? (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-50"
+                  >
+                    Limpar filtros
+                  </button>
+                ) : null}
+
+                <button
+                  type="button"
+                  onClick={loadData}
+                  className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white transition hover:bg-slate-800"
+                >
+                  Aplicar filtros
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           {loading ? (
             <div className="space-y-3">
